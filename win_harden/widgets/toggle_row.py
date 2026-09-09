@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
-    QWidget,
 )
 
 RISK_CLASS = {"low": "ok", "medium": "warn", "high": "bad"}

@@ -15,7 +15,6 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 
 from broker.asr_catalog import ACTION_TO_MP, desktop_rules
 
-from ..widgets.confirm import escape_markup
 from ..widgets.page import Group, KeyValueRow, unknown_label
 from ._levels_page import LevelFamilyPage
 

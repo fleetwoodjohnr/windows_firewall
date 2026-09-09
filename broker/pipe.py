@@ -63,6 +63,9 @@ def pipe_name(sid):
 
 def _win32():
     try:
+        # win32api is imported here purely to fail fast alongside the others if
+        # pywin32 is only partially present; wait_for_client() imports it again
+        # where it is actually used.
         import win32api  # noqa: F401,PLC0415
         import win32file  # noqa: PLC0415
         import win32pipe  # noqa: PLC0415

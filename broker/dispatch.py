@@ -24,10 +24,7 @@ import traceback
 
 from . import guards
 from .protocol import (
-    ERR_BLOCKED,
     ERR_FAILED,
-    ERR_GUARD,
-    ERR_PROTOCOL,
     ERR_VALIDATION,
     PROTOCOL_VERSION,
     ProtocolError,

@@ -113,17 +113,75 @@ def serve(server, dispatcher, log, idle_timeout=IDLE_TIMEOUT_SECONDS):
             return
 
 
+def revert_all(log):
+    """Undo everything this app has applied, then report what could not be.
+
+    Run by the uninstaller, which is already elevated, so it needs no pipe and
+    no client. Uninstalling a hardening tool has to leave the machine as it was
+    found -- otherwise the settings outlive the app that explains them, and
+    nobody is left who knows what changed or how to change it back.
+
+    Failures are reported and the state file is deliberately left in place: a
+    setting that could not be restored is still recorded, so reinstalling and
+    trying again works.
+    """
+    from broker.dispatch import Dispatcher  # noqa: PLC0415
+    from broker.protocol import decode_response  # noqa: PLC0415
+
+    context = build_context(log)
+    dispatcher = Dispatcher(context)
+
+    failures = []
+    for family in sorted(context.families):
+        frame = dispatcher.handle_frame(
+            {"protocol": 1, "id": f"revert-{family}", "verb": "revert", "family": family})
+        _rid, ok, result, _kind, message = decode_response(frame)
+        if not ok:
+            failures.append((family, message))
+            log(f"revert {family}: {message}")
+        elif (result or {}).get("restoreFailures"):
+            for entry in result["restoreFailures"]:
+                failures.append((family, f"{entry['entry']}: {entry['error']}"))
+            log(f"revert {family}: {len(result['restoreFailures'])} entries could not be restored")
+        else:
+            log(f"revert {family}: done")
+
+    if failures:
+        sys.stderr.write(
+            "Some settings could not be put back:\n"
+            + "".join(f"  {family}: {message}\n" for family, message in failures)
+            + f"\nThey are still recorded in {STATE_FILE}, so reinstalling and reverting "
+              f"again will retry them.\n"
+        )
+        return 4
+    log("revert-all complete")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="win-harden-broker", add_help=True)
     parser.add_argument(
         "--client-sid",
-        required=True,
         help="SID of the user this broker serves. Used both to build the pipe's "
              "DACL and to verify the connecting client's token.",
+    )
+    parser.add_argument(
+        "--revert-all",
+        action="store_true",
+        help="Undo every change this app has applied and exit. Used by the uninstaller.",
     )
     args = parser.parse_args(argv)
 
     log = make_logger(LOG_FILE)
+
+    if args.revert_all:
+        if os.name != "nt":
+            log("this broker only runs on Windows")
+            return 2
+        return revert_all(log)
+
+    if not args.client_sid:
+        parser.error("--client-sid is required unless --revert-all is given")
 
     try:
         pipe_module.validate_sid(args.client_sid)

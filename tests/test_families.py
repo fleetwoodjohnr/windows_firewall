@@ -20,7 +20,7 @@ from broker import asr_catalog, guards
 from broker.actions import load_families
 from broker.dispatch import Context, Dispatcher
 from broker.protocol import FAMILIES, decode_response
-from broker.psinvoke import InvocationError, PARAM_PATTERNS, build_argv
+from broker.psinvoke import build_argv
 from broker.registry_txn import FakeRegistry, StateStore
 
 # A machine with some pre-existing values, so restoration has something real to

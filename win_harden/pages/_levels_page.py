@@ -124,7 +124,7 @@ class LevelFamilyPage(Page):
             return
         if isinstance(error, ChangeBlocked):
             self.banner.show_message(
-                f"Windows refused this change", str(error), tone="error")
+                "Windows refused this change", str(error), tone="error")
             return
         self.banner.show_message(
             f"{family.title} could not be set to {level.label}", str(error), tone="error")

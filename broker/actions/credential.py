@@ -10,7 +10,7 @@ boots but has lost a peripheral, so it is Strict-only and the page copy says
 exactly what it costs.
 """
 
-from ._common import Reg, Service, apply_settings
+from ._common import Reg, apply_settings
 
 POLICIES = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 LSA = r"SYSTEM\CurrentControlSet\Control\Lsa"

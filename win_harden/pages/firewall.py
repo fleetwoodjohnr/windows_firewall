@@ -13,7 +13,7 @@ shown as a third state rather than rounded to on or off, because rounding would
 make the switch lie about what is actually open.
 """
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QComboBox, QLabel, QLineEdit
 
 from ..data.rule_groups import describe, is_essential
 from ..widgets.confirm import confirm

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 
 from broker.dns_providers import PROVIDERS, get as get_provider
 
-from ..widgets.page import Group, KeyValueRow, unknown_label
+from ..widgets.page import Group, KeyValueRow
 from ._levels_page import LevelFamilyPage
 
 # Individually switchable components, with why you might want each one back on.

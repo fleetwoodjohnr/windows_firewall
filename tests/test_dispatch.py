@@ -10,7 +10,6 @@ from broker.guards import StubProbes
 from broker.protocol import (
     ERR_BLOCKED,
     ERR_FAILED,
-    ERR_GUARD,
     ERR_PROTOCOL,
     ERR_VALIDATION,
     decode_response,

@@ -154,9 +154,6 @@ def apply(txn, level, ctx):
             "rulesAudited": sum(1 for a in applied_rules.values() if a == "audit"),
         },
     }
-    if live.get("error"):
-        out["error"] = live["error"]
-    return out
 
 
 def revert(txn, ctx):

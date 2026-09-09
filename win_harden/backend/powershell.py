@@ -34,7 +34,9 @@ class PowerShellRunner(QObject):
     def __init__(self, parent=None, script_root=None):
         super().__init__(parent)
         self._script_root = script_root
-        self._running = []
+        # id(process) -> (process, finish). Keyed by id rather than held as a
+        # list so shutdown can complete each pending call.
+        self._running = {}
 
     def run(self, script, params=None, callback=None):
         """callback(result: dict | None, error: WinHardenError | None)"""
@@ -54,23 +56,41 @@ class PowerShellRunner(QObject):
             return
 
         process = QProcess(self)
-        self._running.append(process)
 
         # `finished` and the timeout are made mutually exclusive by this flag,
         # the same guard the broker client uses: a late timeout must not fire
         # after a completion, and vice versa.
-        state = {"done": False}
+        state = {"done": False, "timer": None}
 
         def finish(result, error):
             if state["done"]:
                 return
             state["done"] = True
-            if process in self._running:
-                self._running.remove(process)
+            timer = state["timer"]
+            if timer is not None:
+                timer.stop()
+            self._running.pop(id(process), None)
+            # Disconnect before deleting. Qt can still emit finished() or
+            # errorOccurred() for a process that is on its way out, and a handler
+            # that runs after deleteLater() touches a C++ object Python still has
+            # a wrapper for -- which raises inside a signal handler, where there
+            # is nobody to catch it.
+            try:
+                process.finished.disconnect()
+                process.errorOccurred.disconnect()
+            except (RuntimeError, TypeError):
+                pass
             process.deleteLater()
             callback(result, error)
 
         def on_finished(exit_code, _exit_status):
+            # Qt can deliver finished() and errorOccurred() for the same run, and
+            # `finish` has already called deleteLater() by the time the second
+            # arrives. Reading anything off the QProcess after that raises on the
+            # deleted C++ object, so the guard has to come before the first touch
+            # rather than inside `finish`.
+            if state["done"]:
+                return
             stdout = bytes(process.readAllStandardOutput()).decode("utf-8", "replace")
             stderr = bytes(process.readAllStandardError()).decode("utf-8", "replace")
             if exit_code != 0:
@@ -88,25 +108,51 @@ class PowerShellRunner(QObject):
             finish(parsed if isinstance(parsed, dict) else {"items": parsed}, None)
 
         def on_error(_error):
-            finish(None, PowerShellNotFound(
-                f"couldn't run powershell.exe: {process.errorString()}"
-            ))
+            if state["done"]:
+                return
+            # Read the message while the object is still alive.
+            message = process.errorString()
+            finish(None, PowerShellNotFound(f"couldn't run powershell.exe: {message}"))
 
         process.finished.connect(on_finished)
         process.errorOccurred.connect(on_error)
+        # Keyed by id so shutdown can finish each pending call rather than
+        # killing the process and leaving its caller waiting forever.
+        self._running[id(process)] = (process, finish)
 
         from PySide6.QtCore import QTimer  # noqa: PLC0415
 
-        timer = QTimer(process)
+        def on_timeout():
+            if state["done"]:
+                return
+            process.kill()
+            finish(None, PowerShellError(
+                f"{script} didn't finish within {READ_TIMEOUT_MS // 1000} seconds"))
+
+        # Parented to the runner, not to the process: a timer owned by the
+        # QProcess would be destroyed by deleteLater() mid-callback.
+        timer = QTimer(self)
         timer.setSingleShot(True)
-        timer.timeout.connect(lambda: (process.kill(), finish(None, PowerShellError(
-            f"{script} didn't finish within {READ_TIMEOUT_MS // 1000} seconds"
-        ))))
+        timer.timeout.connect(on_timeout)
         timer.start(READ_TIMEOUT_MS)
+        state["timer"] = timer
 
         process.start(argv[0], argv[1:])
 
     def shutdown(self):
-        for process in list(self._running):
+        """Kill anything in flight AND complete its callback.
+
+        Killing without finishing was a real bug: the call stayed live with its
+        signals connected, and Qt then emitted errorOccurred on a process that
+        had already been destroyed. Every pending call gets an answer, which is
+        the same rule the broker client follows -- a caller left waiting on a
+        reply that never comes is a control greyed out forever.
+        """
+        for process, finish in list(self._running.values()):
+            finish(None, PowerShellError("the application is closing"))
             process.kill()
+            # Bounded wait so the child is reaped before its wrapper goes away.
+            # Without it Qt warns "Destroyed while process is still running" on
+            # every exit, which is noise that trains you to ignore the log.
+            process.waitForFinished(200)
         self._running.clear()
