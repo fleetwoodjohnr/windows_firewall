@@ -24,6 +24,7 @@ so a new field cannot be introduced without also declaring its permitted values.
 """
 
 import json
+import re
 
 # Bumped whenever the request/response shape or the verb set changes. The GUI
 # ships inside the same installer as the broker, but a half-finished upgrade or
@@ -47,6 +48,9 @@ PROVIDERS = ("automatic", "quad9", "cloudflare", "mullvad", "adguard")
 
 ASR_ACTIONS = ("off", "audit", "warn", "block")
 
+# Windows' three firewall profiles, plus "all". Fixed by the OS, not by us.
+PROFILES = ("Domain", "Private", "Public", "All")
+
 # Individually switchable system components. Fixed keys, never a service name or
 # a capability string from the caller -- the broker maps each key to the actual
 # service/feature itself.
@@ -69,6 +73,8 @@ VERBS = (
     "revert",
     "set-asr",
     "set-toggle",
+    "set-rule-group",
+    "set-network-category",
     "set-dns-provider",
     "shutdown",
 )
@@ -84,6 +90,10 @@ FIELD_VALUES = {
     "provider": PROVIDERS,
     "asr_action": ASR_ACTIONS,
     "toggle": TOGGLES,
+    "profile": PROFILES,
+    # Domain is absent on purpose: Windows assigns it when the machine is joined
+    # to a reachable domain, and no application is permitted to set it.
+    "category": ("Public", "Private"),
     "enabled": (True, False),
 }
 
@@ -101,6 +111,16 @@ INT_FIELDS = ("interface",)
 # `interface`: the permitted set is discovered at runtime, not fixed at build.
 GUID_FIELDS = ("asr_rule",)
 
+# The one field carrying text this app did not author: Windows supplies firewall
+# rule group names and the GUI hands one back. It cannot be a fixed list because
+# installed software adds groups, so it is constrained by shape instead -- and
+# the character set deliberately excludes quotes, $, ;, | and backtick, so a
+# group name cannot resemble PowerShell syntax even before it reaches a script
+# that binds it as a parameter rather than interpolating it.
+TEXT_FIELDS = {
+    "group": r"^[A-Za-z0-9 ()/.,+&_'-]{1,128}$",
+}
+
 VERB_FIELDS = {
     "ping": (),
     "status": (),
@@ -108,13 +128,18 @@ VERB_FIELDS = {
     "revert": ("family",),
     "set-asr": ("asr_rule", "asr_action"),
     "set-toggle": ("toggle", "enabled"),
+    "set-rule-group": ("profile", "group", "enabled"),
+    "set-network-category": ("interface", "category"),
     "set-dns-provider": ("provider", "interface"),
     "shutdown": (),
 }
 
 # Verbs that change the system. Everything else is a read and runs unprivileged
 # in the GUI process, so opening a page never triggers a UAC prompt.
-PRIVILEGED_VERBS = ("apply", "revert", "set-asr", "set-toggle", "set-dns-provider")
+PRIVILEGED_VERBS = (
+    "apply", "revert", "set-asr", "set-toggle", "set-rule-group",
+    "set-network-category", "set-dns-provider",
+)
 
 # -- error kinds --------------------------------------------------------------
 #
@@ -147,7 +172,7 @@ def _check_tables():
     boundary -- a verb listing a field nobody constrained -- into something that
     cannot start.
     """
-    known = set(FIELD_VALUES) | set(INT_FIELDS) | set(GUID_FIELDS)
+    known = set(FIELD_VALUES) | set(INT_FIELDS) | set(GUID_FIELDS) | set(TEXT_FIELDS)
     for verb, fields in VERB_FIELDS.items():
         if verb not in VERBS:
             raise AssertionError(f"VERB_FIELDS has {verb!r}, which is not in VERBS")
@@ -236,6 +261,10 @@ def validate_request(payload):
         elif field in GUID_FIELDS:
             if not is_guid(value):
                 raise ProtocolError(f"{field} must be a GUID, got {value!r}")
+        elif field in TEXT_FIELDS:
+            if not isinstance(value, str) or not re.match(TEXT_FIELDS[field], value):
+                raise ProtocolError(
+                    f"{field}={value!r} is not an acceptable {field} name")
         else:  # pragma: no cover - _check_tables makes this unreachable
             raise ProtocolError(f"field {field!r} has no validation rule")
 

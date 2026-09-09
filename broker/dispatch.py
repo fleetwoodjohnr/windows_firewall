@@ -220,6 +220,20 @@ class Dispatcher:
             raise ActionError("this build cannot set individual toggles", ERR_VALIDATION)
         return setter(toggle, enabled, self.context)
 
+    def _verb_set_rule_group(self, request):
+        module = self.context.families.get("exposure")
+        setter = getattr(module, "set_rule_group", None) if module else None
+        if setter is None:
+            raise ActionError("this build cannot change firewall rule groups", ERR_VALIDATION)
+        return setter(request["profile"], request["group"], request["enabled"], self.context)
+
+    def _verb_set_network_category(self, request):
+        module = self.context.families.get("exposure")
+        setter = getattr(module, "set_network_category", None) if module else None
+        if setter is None:
+            raise ActionError("this build cannot change a network's category", ERR_VALIDATION)
+        return setter(request["interface"], request["category"], self.context)
+
     def _verb_set_dns_provider(self, request):
         module = self._family("dns")
         setter = getattr(module, "set_provider", None)

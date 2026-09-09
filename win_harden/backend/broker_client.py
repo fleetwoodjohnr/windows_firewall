@@ -332,5 +332,13 @@ class BrokerClient(QObject):
     def set_toggle(self, toggle, enabled, callback):
         self._send("set-toggle", callback, toggle=toggle, enabled=bool(enabled))
 
+    def set_rule_group(self, profile, group, enabled, callback):
+        self._send("set-rule-group", callback,
+                   profile=profile, group=group, enabled=bool(enabled))
+
+    def set_network_category(self, interface_index, category, callback):
+        self._send("set-network-category", callback,
+                   interface=int(interface_index), category=category)
+
     def set_dns_provider(self, provider, interface_index, callback):
         self._send("set-dns-provider", callback, provider=provider, interface=int(interface_index))

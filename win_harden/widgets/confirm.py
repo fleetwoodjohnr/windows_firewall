@@ -26,7 +26,13 @@ def escape_markup(text):
 def confirm(parent, heading, body, confirm_label, on_confirm, on_cancel=None, destructive=True):
     """Ask, then call back. Cancel is the default so that dismissing the dialog
     -- with Escape, or by clicking away -- never applies anything."""
-    box = QMessageBox(parent)
+    # A dialog's parent must be a QWidget. Anything else -- None, or a caller
+    # that passed something window-like but not a widget -- becomes a parentless
+    # dialog rather than a TypeError, because failing to ask for confirmation is
+    # a much worse outcome than an unparented dialog.
+    from PySide6.QtWidgets import QWidget  # noqa: PLC0415
+
+    box = QMessageBox(parent if isinstance(parent, QWidget) else None)
     box.setIcon(QMessageBox.Warning if destructive else QMessageBox.Question)
     box.setWindowTitle(heading)
     box.setText(f"<b>{escape_markup(heading)}</b>")

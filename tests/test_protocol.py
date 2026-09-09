@@ -15,10 +15,17 @@ class TestTables:
         assert set(p.VERB_FIELDS) == set(p.VERBS)
 
     def test_every_declared_field_has_permitted_values(self):
-        known = set(p.FIELD_VALUES) | set(p.INT_FIELDS) | set(p.GUID_FIELDS)
+        known = (set(p.FIELD_VALUES) | set(p.INT_FIELDS) | set(p.GUID_FIELDS)
+                 | set(p.TEXT_FIELDS))
         for verb, fields in p.VERB_FIELDS.items():
             for field in fields:
                 assert field in known, f"{verb}.{field} is unconstrained"
+
+    def test_free_text_fields_are_the_exception_and_stay_small(self):
+        """Every free-text field widens the trust boundary, so the set is kept
+        deliberately tiny and each one has to justify itself in a comment."""
+        assert set(p.TEXT_FIELDS) == {"group"}, (
+            "a new free-text field was added to the privileged protocol")
 
     def test_privileged_verbs_are_real_verbs(self):
         assert set(p.PRIVILEGED_VERBS) <= set(p.VERBS)
@@ -86,6 +93,28 @@ class TestValidation:
         for bad in [[], "ping", None, 5]:
             with pytest.raises(p.ProtocolError):
                 p.validate_request(bad)
+
+
+class TestRuleGroupNames:
+    """The one field carrying text this app did not author."""
+
+    @pytest.mark.parametrize("group", [
+        "File and Printer Sharing", "Remote Desktop", "Network Discovery (NB-Name-In)",
+        "Cast to Device functionality", "mDNS", "Delivery Optimization",
+    ])
+    def test_accepts_real_windows_group_names(self, group):
+        out = p.validate_request(req(verb="set-rule-group", profile="Public",
+                                     group=group, enabled=False))
+        assert out["group"] == group
+
+    @pytest.mark.parametrize("group", [
+        "x`; Stop-Computer", "$(Invoke-Expression 'bad')", 'x" ; y', "a|b", "a;b",
+        "a" * 129, "", None, 5, "x\ny",
+    ])
+    def test_rejects_anything_shaped_like_powershell(self, group):
+        with pytest.raises(p.ProtocolError):
+            p.validate_request(req(verb="set-rule-group", profile="Public",
+                                   group=group, enabled=False))
 
 
 class TestGuid:

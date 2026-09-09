@@ -125,6 +125,38 @@ def set_toggle(toggle, enabled, ctx):
     return ctx.runner("set-toggle.ps1", {"Toggle": toggle, "State": "on" if enabled else "off"})
 
 
+def set_rule_group(profile, group, enabled, ctx):
+    """Enable or disable every inbound rule in one firewall rule group.
+
+    Not journalled, and deliberately so. A rule group is a visible, directly
+    reversible switch the user flipped themselves -- unlike a level, which moves
+    a dozen settings at once and needs an undo. Recording it would make
+    "revert the exposure family" silently re-open a group the user closed by
+    hand, which is the opposite of what they asked for.
+    """
+    if ctx.runner is None:
+        raise RuntimeError("no PowerShell runner is available")
+    return ctx.runner("set-rule-group.ps1", {
+        "Profile": profile,
+        "Group": group,
+        "State": "on" if enabled else "off",
+    })
+
+
+def set_network_category(interface_index, category, ctx):
+    """Mark one connected network public or private.
+
+    Not journalled, for the same reason as set_rule_group: it is a direct,
+    visible choice the user made about one network, not part of a level.
+    """
+    if ctx.runner is None:
+        raise RuntimeError("no PowerShell runner is available")
+    return ctx.runner("set-network-category.ps1", {
+        "InterfaceIndex": str(int(interface_index)),
+        "Category": category,
+    })
+
+
 def status(ctx):
     registry = ctx.registry
 
