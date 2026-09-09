@@ -51,15 +51,27 @@ POWERSHELL = "powershell.exe"
 # Parameter value patterns. A parameter whose name is not here cannot be passed.
 PARAM_PATTERNS = {
     "Level": r"^(off|basic|balanced|strict)$",
-    "Family": r"^(defender|exploit|exposure|credential|dns|tls)$",
     "Provider": r"^(automatic|quad9|cloudflare|mullvad|adguard)$",
     "Profile": r"^(Domain|Private|Public|All)$",
     "Action": r"^(off|audit|warn|block)$",
     "State": r"^(on|off)$",
     "Category": r"^(Public|Private)$",
-    "Toggle": r"^[a-z0-9-]{1,32}$",
+    # Filled in below from TOGGLE_IDS, so a typo'd toggle is refused here rather
+    # than reaching a .ps1 that silently has no branch for it.
+    "Toggle": None,
     "RuleId": r"^\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?$",
     "InterfaceIndex": r"^[0-9]{1,10}$",
+    # Defender preference name and value. Both are closed enums so that
+    # restoring a prior value goes through exactly the same validation as
+    # setting a new one -- a journal must never become a way to pass free text
+    # into an elevated process.
+    "Setting": r"^(mapsReporting|submitSamples|cloudBlockLevel|puaProtection"
+               r"|controlledFolderAccess|networkProtection|cloudExtendedTimeout"
+               r"|realtimeMonitoring)$",
+    "Value": r"^(Disabled|Basic|Advanced|AlwaysPrompt|SendSafeSamples|NeverSend"
+             r"|SendAllSamples|Default|Moderate|High|HighPlus|ZeroTolerance"
+             r"|Enabled|AuditMode|True|False|0|10|20|30|40|50)$",
+    "Mitigation": r"^(dep|aslr-bottomup|aslr-highentropy|aslr-force|sehop|cfg)$",
     # A firewall rule group's display name is the one parameter carrying text we
     # did not author -- Windows supplies it and the GUI hands it back. It is
     # still never interpolated into script text: it crosses as one argv element
@@ -68,6 +80,33 @@ PARAM_PATTERNS = {
     # some future caller did the wrong thing with it.
     "Group": r"^[A-Za-z0-9 ()/.,+&_'-]{1,128}$",
 }
+
+# Every switchable component, as one authoritative list.
+#
+# `protocol.TOGGLES` is the subset the GUI is allowed to ask for. The rest are
+# used by the broker's own level modules -- a level switches NetBIOS off, but
+# there is no button for it, because it belongs to a level rather than standing
+# on its own. Keeping both in one place means a level cannot reference a toggle
+# that no script implements, and a test asserts the GUI's list is a subset.
+TOGGLE_IDS = (
+    # GUI-facing
+    "openssh-server",
+    "smb1",
+    "rdp",
+    "winrm",
+    "remote-registry",
+    "firewall-domain",
+    "firewall-private",
+    "firewall-public",
+    "panic-mode",
+    # broker-internal, driven by level modules
+    "netbios",
+    "inbound-block",
+    "guest-account",
+    "wpad-service",
+)
+
+PARAM_PATTERNS["Toggle"] = "^(" + "|".join(TOGGLE_IDS) + ")$"
 
 # script file name -> the parameters it accepts. Required params are listed in
 # `required`; anything in `optional` may be omitted.
@@ -87,7 +126,8 @@ SCRIPTS = {
     "set-dns-provider.ps1": {"required": ("InterfaceIndex", "Provider"), "optional": ()},
     "set-asr.ps1": {"required": ("RuleId", "Action"), "optional": ()},
     "set-toggle.ps1": {"required": ("Toggle", "State"), "optional": ()},
-    "apply-level.ps1": {"required": ("Family", "Level"), "optional": ()},
+    "set-defender.ps1": {"required": ("Setting", "Value"), "optional": ()},
+    "set-mitigation.ps1": {"required": ("Mitigation", "State"), "optional": ()},
 }
 
 # Reads are the subset the GUI may run in its own unelevated process.

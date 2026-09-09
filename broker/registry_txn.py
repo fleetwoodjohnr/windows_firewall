@@ -236,6 +236,8 @@ class StateStore:
         data.setdefault("version", STATE_VERSION)
         families = data.get("families")
         data["families"] = families if isinstance(families, dict) else {}
+        originals = data.get("originals")
+        data["originals"] = originals if isinstance(originals, dict) else {}
         return data
 
     def save(self):
@@ -262,12 +264,43 @@ class StateStore:
         if not isinstance(section, dict):
             section = {}
         section.setdefault("level", "off")
-        journal = section.get("journal")
-        section["journal"] = journal if isinstance(journal, list) else []
+        claims = section.get("claims")
+        section["claims"] = claims if isinstance(claims, list) else []
         notes = section.get("notes")
         section["notes"] = notes if isinstance(notes, dict) else {}
         self._data["families"][name] = section
         return section
+
+    def originals(self):
+        """The machine-wide record of what each touched thing looked like BEFORE
+        this app first changed it.
+
+        Deliberately not per-family. Two families legitimately set the same
+        value -- DNS privacy and Network Exposure both switch LLMNR off -- and
+        when the second one applied, a per-family journal captured the first
+        one's write and called it the original. Reverting both then restored
+        that value instead of deleting it, and whether the machine ended up
+        correct depended on the order the families happened to be reverted in.
+
+        One table, first capture wins, so "the original" means the same thing to
+        every family.
+        """
+        return self._data["originals"]
+
+    def other_claimants(self, identity, excluding):
+        """Which still-applied families also want `identity` set.
+
+        A value is only put back when nobody is left who asked for it. Reverting
+        one family must not undo a setting another applied family still depends
+        on.
+        """
+        holders = []
+        for name, section in self._data["families"].items():
+            if name == excluding or section.get("level", "off") == "off":
+                continue
+            if identity in (section.get("claims") or []):
+                holders.append(name)
+        return holders
 
     def level(self, name):
         return self.family(name)["level"]
@@ -312,14 +345,14 @@ class Transaction:
     def begin(self, level):
         """Start applying `level`.
 
-        Originals are captured only when the family is currently `off`. Moving
-        between two applied levels reuses the journal that is already there, so
-        the recorded original stays the machine's real original rather than
-        whatever the previous level happened to write.
+        Claims are reset when the family is currently `off`, so a family that
+        stops setting something at a higher level stops claiming it too. The
+        recorded originals are NOT reset -- they live in the machine-wide table
+        and the first capture is the true one, whichever family made it.
         """
         self._capturing = self._section["level"] == "off"
         if self._capturing:
-            self._section["journal"] = []
+            self._section["claims"] = []
         return self._capturing
 
     def commit(self, level, notes=None):
@@ -330,33 +363,39 @@ class Transaction:
 
     # -- recording ------------------------------------------------------------
 
-    def _already_journaled(self, kind, identity):
-        return any(
-            entry.get("kind") == kind and entry.get("_id") == identity
-            for entry in self._section["journal"]
-        )
+    def _claimed(self, identity):
+        return identity in self._section["claims"]
 
     def record(self, kind, identity, entry):
-        """Journal one original, unless this exact thing is already journaled.
+        """Record one original in the machine-wide table, and claim it for this
+        family.
 
-        The dedupe is what makes stepping between levels safe: Balanced and
-        Strict both touch `RunAsPPL`, and only the first capture -- the one
-        taken while the family was still `off` -- is the true original.
+        Two dedupes, doing different jobs:
+
+          * The originals table takes the FIRST capture and never overwrites it.
+            That is what makes stepping Basic -> Balanced -> Strict safe (both
+            touch RunAsPPL), and what stops a second family capturing the first
+            family's write as though it were the machine's original.
+          * The claim list is per-family and says "this family wants this set".
+            Revert consults every family's claims before putting anything back.
         """
-        if self._already_journaled(kind, identity):
-            return False
-        record = dict(entry)
-        record["kind"] = kind
-        record["_id"] = identity
-        self._section["journal"].append(record)
-        return True
+        originals = self.store.originals()
+        captured = identity not in originals
+        if captured:
+            record = dict(entry)
+            record["kind"] = kind
+            record["_id"] = identity
+            originals[identity] = record
+        if not self._claimed(identity):
+            self._section["claims"].append(identity)
+        return captured
 
     def capture_reg(self, hive, path, name):
         """Record the current state of one value without changing it."""
         if hive not in HIVES:
             raise RegistryError(f"unknown hive {hive!r}")
         identity = f"{hive}\\{path.rstrip(chr(92)).lower()}\\{name.lower()}"
-        if self._already_journaled("registry", identity):
+        if identity in self.store.originals() and self._claimed(identity):
             return
         existed, value_type, value = self.registry.read_value(hive, path, name)
         self.record("registry", identity, {
@@ -394,26 +433,43 @@ class Transaction:
         Returns a list of (entry, exception) for whatever could not be restored;
         empty means the machine is back exactly where it started.
         """
+        originals = self.store.originals()
         failures = []
-        for entry in reversed(self._section["journal"]):
+        kept = []
+
+        # Mark this family as off first, so other_claimants() does not count it
+        # as a claimant of its own values.
+        was_level, self._section["level"] = self._section["level"], "off"
+
+        for identity in reversed(self._section["claims"]):
+            if self.store.other_claimants(identity, excluding=self.family):
+                # Another applied family still wants this set. Leave it alone and
+                # drop our claim; it will be restored when the last claimant goes.
+                continue
+            entry = originals.get(identity)
+            if entry is None:
+                continue
             restore = _RESTORERS.get(entry.get("kind"))
             if restore is None:
                 failures.append((entry, RegistryError(
                     f"no restorer registered for journal entry kind {entry.get('kind')!r}"
                 )))
+                kept.append(identity)
                 continue
             try:
                 restore(entry, self.context)
             except Exception as e:  # noqa: BLE001 - one bad entry must not strand the rest
                 failures.append((entry, e))
+                kept.append(identity)
+            else:
+                originals.pop(identity, None)
 
-        # Entries that could not be restored stay in the journal so a later
-        # revert can retry them. Dropping them would quietly turn a failure into
-        # a permanent change.
-        self._section["journal"] = [
-            dict(entry) for entry, _ in failures
-        ]
-        self._section["level"] = "off" if not failures else self._section["level"]
+        # Anything that could not be restored keeps its claim and its recorded
+        # original, so a later revert can retry it. Dropping either would quietly
+        # turn a failed restore into a permanent change.
+        self._section["claims"] = kept
+        if failures:
+            self._section["level"] = was_level
         self._section["notes"] = {}
         self.store.save()
         return failures

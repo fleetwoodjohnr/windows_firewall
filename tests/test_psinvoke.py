@@ -28,7 +28,8 @@ class TestNeverAShell:
         assert "-NonInteractive" in argv
 
     def test_argv_is_a_list_of_strings(self):
-        argv = ps.build_argv("apply-level.ps1", {"Family": "dns", "Level": "off"}, script_root="/ps")
+        argv = ps.build_argv("set-defender.ps1",
+                             {"Setting": "cloudBlockLevel", "Value": "High"}, script_root="/ps")
         assert isinstance(argv, list)
         assert all(isinstance(part, str) for part in argv)
 
@@ -54,16 +55,37 @@ class TestParameterValues:
     @pytest.mark.parametrize("value", [
         "; Remove-Item C:\\ -Recurse",
         "$(Invoke-Expression 'bad')",
-        "off`nStop-Service",
-        "off | Out-File",
-        "off' ; 'x",
-        "../../off",
-        "OFF",
+        "block`nStop-Service",
+        "block | Out-File",
+        "block' ; 'x",
+        "../../block",
+        "BLOCK",
         "",
     ])
-    def test_rejects_a_level_that_is_not_one_of_four(self, value):
+    def test_rejects_an_action_that_is_not_one_of_four(self, value):
+        guid = "BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550"
         with pytest.raises(ps.InvocationError):
-            ps.build_argv("apply-level.ps1", {"Family": "dns", "Level": value}, script_root="/ps")
+            ps.build_argv("set-asr.ps1", {"RuleId": guid, "Action": value}, script_root="/ps")
+
+    def test_toggle_ids_are_a_closed_list_not_a_pattern(self):
+        """A toggle that no script implements must be refused here rather than
+        reaching a .ps1 that silently has no branch for it."""
+        from broker.protocol import TOGGLES
+        assert set(TOGGLES) <= set(ps.TOGGLE_IDS)
+        for toggle in ps.TOGGLE_IDS:
+            ps.build_argv("set-toggle.ps1", {"Toggle": toggle, "State": "off"}, script_root="/ps")
+        for bad in ["made-up", "rdp-x", "RDP", ""]:
+            with pytest.raises(ps.InvocationError):
+                ps.build_argv("set-toggle.ps1", {"Toggle": bad, "State": "off"}, script_root="/ps")
+
+    def test_defender_setting_and_value_are_closed_enums(self):
+        ps.build_argv("set-defender.ps1", {"Setting": "cloudBlockLevel", "Value": "HighPlus"},
+                      script_root="/ps")
+        for setting, value in [("wipeDisk", "High"), ("cloudBlockLevel", "$(bad)"),
+                               ("cloudBlockLevel", "High; Stop-Service")]:
+            with pytest.raises(ps.InvocationError):
+                ps.build_argv("set-defender.ps1", {"Setting": setting, "Value": value},
+                              script_root="/ps")
 
     def test_rejects_a_value_that_looks_like_a_switch(self):
         # PowerShell would bind a leading '-' as the next parameter name.
@@ -72,12 +94,13 @@ class TestParameterValues:
 
     def test_rejects_an_undeclared_parameter(self):
         with pytest.raises(ps.InvocationError, match="does not accept"):
-            ps.build_argv("apply-level.ps1",
-                          {"Family": "dns", "Level": "off", "Path": "C:\\"}, script_root="/ps")
+            ps.build_argv("set-defender.ps1",
+                          {"Setting": "cloudBlockLevel", "Value": "High", "Path": "C:\\"},
+                          script_root="/ps")
 
     def test_rejects_a_missing_required_parameter(self):
         with pytest.raises(ps.InvocationError, match="requires parameter"):
-            ps.build_argv("apply-level.ps1", {"Family": "dns"}, script_root="/ps")
+            ps.build_argv("set-defender.ps1", {"Setting": "cloudBlockLevel"}, script_root="/ps")
 
     def test_rejects_a_bool(self):
         with pytest.raises(ps.InvocationError, match="bool"):
@@ -115,5 +138,6 @@ def _sample(name):
         "Level": "off", "Family": "dns", "Provider": "quad9", "Profile": "Public",
         "Action": "block", "State": "off", "Category": "Public", "Toggle": "rdp",
         "RuleId": "BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550", "InterfaceIndex": "3",
-        "Group": "Remote Desktop",
+        "Group": "Remote Desktop", "Setting": "cloudBlockLevel", "Value": "High",
+        "Mitigation": "dep",
     }[name]

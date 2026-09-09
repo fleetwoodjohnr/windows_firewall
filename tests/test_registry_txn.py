@@ -86,13 +86,16 @@ class TestSteppingBetweenLevels:
         second = txn(store, registry)
         assert second.begin("strict") is False
 
-    def test_journal_records_each_value_once(self, store, registry):
+    def test_originals_record_each_value_once(self, store, registry):
         t = txn(store, registry)
         t.begin("basic")
         t.set_reg(HIVE, PATH, "Existing", "REG_DWORD", 1)
         t.set_reg(HIVE, PATH, "Existing", "REG_DWORD", 2)
         t.commit("basic")
-        assert len(store.family("credential")["journal"]) == 1
+        assert len(store.originals()) == 1
+        assert len(store.family("credential")["claims"]) == 1
+        # The first capture is the true original, not the intermediate value.
+        assert next(iter(store.originals().values()))["value"] == 5
 
     def test_going_off_then_on_recaptures(self, store, registry):
         t = txn(store, registry)
@@ -158,8 +161,10 @@ class TestPartialFailure:
                 raise OSError("nope")
 
         Transaction(store, "credential", registry=Exploding(registry.values)).revert()
-        # Dropping it would quietly turn a failure into a permanent change.
-        assert len(store.family("credential")["journal"]) == 1
+        # Dropping either the claim or the recorded original would quietly turn
+        # a failed restore into a permanent change.
+        assert len(store.family("credential")["claims"]) == 1
+        assert len(store.originals()) == 1
         assert store.level("credential") != "off"
 
         assert Transaction(store, "credential", registry=registry).revert() == []
@@ -221,3 +226,58 @@ class TestSafety:
         t.set_reg(HIVE, PATH, "Bin", "REG_BINARY", "deadbeef")
         t.commit("basic")
         json.loads(open(store.path).read())
+
+
+class TestSharedValues:
+    """Two families legitimately set the same value. This is the case that
+    quietly produced a wrong result until the originals table was made
+    machine-wide rather than per-family."""
+
+    IDENT = (HIVE, PATH, "Shared")
+
+    def _apply(self, store, registry, family, value):
+        t = Transaction(store, family, registry=registry)
+        t.begin("balanced")
+        t.set_reg(*self.IDENT, "REG_DWORD", value)
+        t.commit("balanced")
+
+    def test_second_family_does_not_capture_the_first_families_write(self, store, registry):
+        registry.write_value(*self.IDENT, "REG_DWORD", 7)
+        self._apply(store, registry, "dns", 0)
+        self._apply(store, registry, "exposure", 0)
+        # One recorded original, and it is the machine's -- not dns's write.
+        assert len(store.originals()) == 1
+        assert next(iter(store.originals().values()))["value"] == 7
+
+    def test_reverting_one_leaves_the_value_the_other_still_wants(self, store, registry):
+        registry.write_value(*self.IDENT, "REG_DWORD", 7)
+        self._apply(store, registry, "dns", 0)
+        self._apply(store, registry, "exposure", 0)
+
+        Transaction(store, "exposure", registry=registry).revert()
+        # dns is still applied and still wants this off.
+        assert registry.read_value(*self.IDENT)[2] == 0
+        assert store.level("dns") == "balanced"
+
+    def test_reverting_the_last_claimant_restores_the_original(self, store, registry):
+        registry.write_value(*self.IDENT, "REG_DWORD", 7)
+        self._apply(store, registry, "dns", 0)
+        self._apply(store, registry, "exposure", 0)
+
+        Transaction(store, "exposure", registry=registry).revert()
+        Transaction(store, "dns", registry=registry).revert()
+        assert registry.read_value(*self.IDENT)[2] == 7
+        assert store.originals() == {}
+
+    def test_revert_order_does_not_matter(self, store, registry):
+        """The bug this guards against made correctness depend on which family
+        happened to be reverted first."""
+        for first, second in (("dns", "exposure"), ("exposure", "dns")):
+            reg = FakeRegistry()
+            st = StateStore(store.path + f".{first}")
+            self._apply(st, reg, "dns", 0)
+            self._apply(st, reg, "exposure", 0)
+            Transaction(st, first, registry=reg).revert()
+            Transaction(st, second, registry=reg).revert()
+            # The value never existed, so it must be gone -- not left at 0.
+            assert reg.read_value(*self.IDENT) == (False, None, None), first
