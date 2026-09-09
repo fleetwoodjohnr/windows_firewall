@@ -1,0 +1,162 @@
+/* Windows Firewall & Hardening -- application stylesheet.
+ *
+ * Tokens written as an at-sign followed by a braced name are substituted at load time by application.py from one
+ * of two palettes, so light and dark are one stylesheet rather than two that
+ * drift apart. Every colour used anywhere is defined in that palette; nothing
+ * here hard-codes a hex value.
+ *
+ * The visual language is Win11 Fluent as far as a Qt stylesheet reasonably
+ * reaches: Segoe UI Variable, 8px radii, hairline borders instead of heavy
+ * frames, and colour used sparingly and only where it carries meaning.
+ *
+ * The one place colour genuinely carries meaning is the level selector, where
+ * the applied notch is tinted red -> amber -> amber -> green. That is a readout
+ * of what is actually applied, never of what is being previewed.
+ */
+
+QWidget {
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 10pt;
+    color: @{fg};
+}
+
+QMainWindow, #contentArea, QStackedWidget { background: @{bg}; }
+QScrollArea { border: none; background: transparent; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+
+/* -- left navigation ------------------------------------------------------ */
+
+#navPanel {
+    background: @{navBg};
+    border-right: 1px solid @{border};
+}
+#navPanel QListWidget { background: transparent; border: none; outline: none; }
+#navPanel QListWidget::item {
+    padding: 10px 14px;
+    margin: 2px 8px;
+    border-radius: 6px;
+    color: @{fg};
+}
+#navPanel QListWidget::item:hover { background: @{hover}; }
+#navPanel QListWidget::item:selected {
+    background: @{selected};
+    color: @{fg};
+    /* The 3px accent bar is Win11's selected-nav-item signature. */
+    border-left: 3px solid @{accent};
+    padding-left: 11px;
+}
+#appTitle { font-size: 13pt; font-weight: 600; padding: 18px 16px 6px 16px; }
+#appSubtitle { color: @{dim}; padding: 0 16px 14px 16px; }
+
+/* -- cards and groups ----------------------------------------------------- */
+
+#card {
+    background: @{cardBg};
+    border: 1px solid @{border};
+    border-radius: 8px;
+}
+#groupTitle { font-size: 11pt; font-weight: 600; padding-bottom: 2px; }
+#groupSubtitle { color: @{dim}; padding-bottom: 6px; }
+#pageTitle { font-size: 17pt; font-weight: 600; }
+#pageSubtitle { color: @{dim}; }
+
+#rowTitle { font-weight: 600; }
+#rowSubtitle, #rowDetail, #levelDescription { color: @{dim}; }
+#rowDetail { padding: 6px 0 2px 26px; }
+
+#toggleRow { border-bottom: 1px solid @{borderSoft}; }
+#toggleRow:hover { background: @{hover}; }
+
+#riskDot[risk="ok"]   { color: @{ok}; }
+#riskDot[risk="warn"] { color: @{warn}; }
+#riskDot[risk="bad"]  { color: @{bad}; }
+
+/* -- banners -------------------------------------------------------------- */
+
+#banner {
+    border-radius: 8px;
+    padding: 12px 14px;
+    border: 1px solid @{border};
+    background: @{cardBg};
+}
+#banner[tone="warning"] { background: @{warnBg}; border-color: @{warn}; }
+#banner[tone="error"]   { background: @{badBg};  border-color: @{bad}; }
+#banner[tone="ok"]      { background: @{okBg};   border-color: @{ok}; }
+#bannerTitle { font-weight: 600; }
+
+/* -- level selector ------------------------------------------------------- */
+/*
+ * Four linked segments. `applied` marks the notch the system is actually at;
+ * `level` carries which level that is, so the tint tracks applied state.
+ */
+
+LevelSelector QPushButton {
+    background: @{cardBg};
+    border: 1px solid @{border};
+    padding: 8px 10px;
+    font-weight: 600;
+    color: @{dim};
+}
+LevelSelector QPushButton[segment="first"]  { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+LevelSelector QPushButton[segment="last"]   { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+LevelSelector QPushButton[segment="middle"] { border-left: none; border-right: none; }
+LevelSelector QPushButton[segment="last"]   { border-left: none; }
+LevelSelector QPushButton:hover:!checked    { background: @{hover}; color: @{fg}; }
+LevelSelector QPushButton:disabled          { color: @{disabled}; }
+
+LevelSelector QPushButton[applied="true"] { color: @{fg}; }
+LevelSelector QPushButton[applied="true"][level="off"]      { background: @{badBg};  border-color: @{bad}; }
+LevelSelector QPushButton[applied="true"][level="basic"]    { background: @{warnBg}; border-color: @{warn}; }
+LevelSelector QPushButton[applied="true"][level="balanced"] { background: @{okBg};   border-color: @{ok}; }
+LevelSelector QPushButton[applied="true"][level="strict"]   { background: @{okBg};   border-color: @{ok}; }
+
+/* -- controls ------------------------------------------------------------- */
+
+QPushButton {
+    background: @{cardBg};
+    border: 1px solid @{border};
+    border-radius: 6px;
+    padding: 7px 14px;
+}
+QPushButton:hover    { background: @{hover}; }
+QPushButton:disabled { color: @{disabled}; }
+QPushButton[accent="true"] {
+    background: @{accent}; border-color: @{accent}; color: @{accentFg}; font-weight: 600;
+}
+QPushButton[destructive="true"] {
+    background: @{bad}; border-color: @{bad}; color: @{accentFg}; font-weight: 600;
+}
+
+QComboBox, QLineEdit {
+    background: @{cardBg};
+    border: 1px solid @{border};
+    border-radius: 6px;
+    padding: 6px 10px;
+    min-height: 18px;
+}
+QComboBox:focus, QLineEdit:focus { border-color: @{accent}; }
+QComboBox QAbstractItemView {
+    background: @{cardBg}; border: 1px solid @{border}; selection-background-color: @{selected};
+}
+
+#switch::indicator { width: 40px; height: 20px; }
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    border: 1px solid @{border}; border-radius: 4px; background: @{cardBg};
+}
+QCheckBox::indicator:checked { background: @{accent}; border-color: @{accent}; }
+QCheckBox::indicator:disabled { background: @{hover}; }
+
+#expander { border: none; background: transparent; color: @{dim}; padding: 2px 6px; }
+#expander:hover { color: @{fg}; }
+
+QToolTip {
+    background: @{cardBg}; color: @{fg};
+    border: 1px solid @{border}; border-radius: 4px; padding: 5px;
+}
+
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: @{border}; border-radius: 5px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: @{dim}; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
