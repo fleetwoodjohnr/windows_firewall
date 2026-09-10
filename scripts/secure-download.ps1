@@ -47,7 +47,8 @@ function Get-VerifiedDownload {
     if ($Package.publisher) {
         $sig = Get-AuthenticodeSignature -LiteralPath $Destination
         if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch $Package.publisher) {
-            throw "The expected publisher signature could not be verified for $Destination"
+            $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '(no signer)' }
+            throw "The expected publisher signature could not be verified for $Destination. Status: $($sig.Status). Subject: $subject"
         }
     }
     Assert-ScannedFile -Path $Destination

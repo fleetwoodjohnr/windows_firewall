@@ -155,6 +155,8 @@ class TestBootstrap:
         for name in ('python', 'inno', 'sysmon'):
             assert re.fullmatch(r'[a-fA-F0-9]{64}', manifest[name]['sha256'])
             assert manifest[name]['url'].startswith('https://')
+        for name in ('python', 'inno'):
+            assert manifest[name]['publisher']
         assert 'Get-VerifiedDownload' in BOOTSTRAP
 
     def test_refuses_to_build_from_a_failing_tree(self):
