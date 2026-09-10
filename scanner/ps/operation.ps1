@@ -88,27 +88,68 @@ try {
     $output = & $mp @argsList 2>&1
     $code = $LASTEXITCODE
     $completed = Get-Date
-    $events = @(Get-WinEvent -FilterHashtable @{ LogName=$logName; Id=@(1000,1001,1002); StartTime=$started.AddSeconds(-1) } -ErrorAction SilentlyContinue |
-        Where-Object { $_.RecordId -gt $watermark })
-    $starts = @{}
-    $ends = @{}
-    foreach ($event in $events) {
-        $xml = [xml]$event.ToXml()
-        $data = @{}
-        foreach ($d in $xml.Event.EventData.Data) { $data[[string]$d.Name] = [string]$d.'#text' }
-        $id = $data['Scan ID']
-        if ($id) {
-            if ($event.Id -eq 1000) {
-                # Resource data is present for custom scans. Without it, do not
-                # attribute a concurrent Windows scan to the requested file.
-                $resource = ([string]$data['Scan Resources']).Trim()
-                $matchesFile = $resource -eq $LiteralPath -or $resource -eq "file:_$LiteralPath" -or $resource -eq "containerfile:_$LiteralPath"
-                if ($Operation -ne 'custom' -or $matchesFile) { $starts[$id] = $true }
+    # MpCmdRun returns as soon as the service answers, but MsMpEng writes the
+    # start and finish records to the channel afterwards. Reading the log once
+    # raced that flush and reported a completed scan as unverified, so wait for
+    # the pair instead. A healthy machine matches on the first pass.
+    $deadline = (Get-Date).AddSeconds(60)
+    $verified = $false
+    $attribution = 'none'
+    $seenEvents = 0
+    $seenStarts = 0
+    $seenMatched = 0
+    $seenEnds = 0
+    do {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName=$logName; Id=@(1000,1001,1002); StartTime=$started.AddSeconds(-1) } -ErrorAction SilentlyContinue |
+            Where-Object { $_.RecordId -gt $watermark })
+        $starts = @{}
+        $ends = @{}
+        $anyStarts = @{}
+        foreach ($event in $events) {
+            $xml = [xml]$event.ToXml()
+            $data = @{}
+            foreach ($d in $xml.Event.EventData.Data) { $data[[string]$d.Name] = [string]$d.'#text' }
+            $id = $data['Scan ID']
+            if ($id) {
+                if ($event.Id -eq 1000) {
+                    # Resource data is present for custom scans. Without it, do not
+                    # attribute a concurrent Windows scan to the requested file.
+                    $anyStarts[$id] = $true
+                    $resource = ([string]$data['Scan Resources']).Trim()
+                    $matchesFile = $resource -eq $LiteralPath -or $resource -eq "file:_$LiteralPath" -or $resource -eq "containerfile:_$LiteralPath"
+                    if ($Operation -ne 'custom' -or $matchesFile) { $starts[$id] = $true }
+                }
+                if ($event.Id -eq 1001) { $ends[$id] = $true }
             }
-            if ($event.Id -eq 1001) { $ends[$id] = $true }
         }
+        $seenEvents = $events.Count
+        $seenStarts = $anyStarts.Count
+        $seenMatched = $starts.Count
+        $seenEnds = $ends.Count
+        # At least one, not exactly one: real-time protection scans the file as it
+        # is written, so a second completed pair is expected and is not a fault.
+        if (@($starts.Keys | Where-Object { $ends.ContainsKey($_) }).Count -ge 1) {
+            $verified = $true
+            $attribution = 'resource'
+            break
+        }
+        # Only when nothing matched by resource. The watermark is taken immediately
+        # before the scan, so a single new pair inside that window is this scan.
+        if (@($anyStarts.Keys | Where-Object { $ends.ContainsKey($_) }).Count -eq 1) {
+            $verified = $true
+            $attribution = 'window'
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+    # Counts only, so a system scan can never disclose another user's file paths.
+    $evidence = @{ events=$seenEvents; scanStarts=$seenStarts; resourceMatched=$seenMatched;
+                   scanFinishes=$seenEnds; attribution=$attribution }
+    if ($Operation -eq 'custom') {
+        $text = ([string]($output | Out-String)).Trim() -replace '\s+', ' '
+        if ($text.Length -gt 500) { $text = $text.Substring(0, 500) }
+        $evidence['output'] = $text
     }
-    $verified = @($starts.Keys | Where-Object { $ends.ContainsKey($_) }).Count -eq 1
     $active = @{}
     foreach ($t in @(Get-MpThreat -ErrorAction Stop)) { $active[[string]$t.ThreatID] = $t }
     $threats = @()
@@ -125,6 +166,7 @@ try {
             resource=$(if ($Operation -eq 'custom') { $LiteralPath } else { 'See Windows Security' }) }
     }
     @{ exitCode=$code; scanCompleted=$verified; threats=@($threats | Select-Object -First 30);
+       scanEvidence=$evidence;
        started=$started.ToUniversalTime().ToString('o'); finished=$completed.ToUniversalTime().ToString('o') } |
         ConvertTo-Json -Depth 6 -Compress
 } catch {

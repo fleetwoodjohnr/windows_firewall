@@ -20,6 +20,7 @@ BUILD = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
 BOOTSTRAP = (ROOT / "scripts" / "bootstrap.ps1").read_text(encoding="utf-8")
 ISS = (ROOT / "installer" / "win-harden.iss").read_text(encoding="utf-8")
 EXTRAS = (ROOT / "scripts" / "extras.ps1").read_text(encoding="utf-8")
+SCAN = (ROOT / "scanner" / "ps" / "operation.ps1").read_text(encoding="utf-8")
 
 TRUST_NS = "urn:schemas-microsoft-com:asm.v3"
 
@@ -143,6 +144,39 @@ class TestBootstrap:
 
     def test_refuses_to_build_from_a_failing_tree(self):
         assert 'pytest' in BOOTSTRAP
+
+
+class TestScanCompletion:
+    """Defender writes its scan records after MpCmdRun returns.
+
+    Reading the log once raced that flush, so every download check could fail
+    on a machine that had just scanned the file cleanly.
+    """
+
+    def test_waits_for_the_completion_event_instead_of_reading_once(self):
+        scan = SCAN.index('$output = & $mp @argsList')
+        loop_end = SCAN.index('while ((Get-Date) -lt $deadline)')
+        window = SCAN[scan:loop_end]
+        assert 'Start-Sleep' in window, 'the event log is still read without waiting'
+        assert 'AddSeconds(60)' in window, 'the wait must be bounded; nothing times this call out'
+        assert 'Get-WinEvent' in window, 'the log must be re-read inside the wait'
+
+    def test_a_second_completed_scan_is_not_a_failure(self):
+        # Real-time protection scans the file as it is written, so requiring
+        # exactly one completed pair fails on a correctly configured machine.
+        assert '@($starts.Keys | Where-Object { $ends.ContainsKey($_) }).Count -ge 1' in SCAN
+        assert '$verified = @($starts.Keys | Where-Object { $ends.ContainsKey($_) }).Count -eq 1' not in SCAN
+
+    def test_the_consumed_result_keys_are_still_emitted(self):
+        for key in ('exitCode', 'scanCompleted', 'threats', 'excluded', 'error'):
+            assert key + '=' in SCAN, f'scanner/engine.py reads {key}'
+
+    def test_diagnostics_never_disclose_scanned_paths(self):
+        evidence = SCAN.split('$evidence = @{')[1].split('$active = @{}')[0]
+        assert 'Scan Resources' not in evidence
+        assert 'attribution' in evidence
+        # Command output names the file, so only the caller's own target may appear.
+        assert "if ($Operation -eq 'custom')" in evidence
         assert 'Not building an installer from a failing tree' in BOOTSTRAP
 
 
