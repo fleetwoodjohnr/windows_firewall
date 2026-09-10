@@ -125,6 +125,21 @@ class TestBootstrap:
         assert workflow.index('prepare-windows-runner.ps1') < workflow.index('scripts\\bootstrap.ps1')
         assert 'prepare-windows-runner' not in ISS
 
+    def test_workflow_selects_the_pinned_build_python(self):
+        import json
+        manifest = json.loads((ROOT / 'scripts' / 'downloads.json').read_text())
+        workflow = (ROOT / '.github' / 'workflows' / 'windows.yml').read_text()
+        version = manifest['python']['version']
+        assert 'uses: actions/setup-python@v6' in workflow
+        assert f"python-version: '{version}'" in workflow
+        assert 'architecture: x64' in workflow
+        assert 'BUILD_PYTHON: ${{ steps.build-python.outputs.python-path }}' in workflow
+        assert 'bootstrap.ps1 -BuildPython $env:BUILD_PYTHON' in workflow
+        assert workflow.index('prepare-windows-runner.ps1') < workflow.index('actions/setup-python@v6')
+        assert '[string]$BuildPython' in BOOTSTRAP
+        assert 'Resolve-Path -LiteralPath $BuildPython' in BOOTSTRAP
+        assert '$manifest.python.version' in BOOTSTRAP
+
     def test_dependencies_pinned_hashed_and_scanned_before_install(self):
         lock = (ROOT / 'requirements-win.lock').read_text().lower()
         for package in ('pyside6', 'pywin32', 'pyinstaller'):

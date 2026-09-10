@@ -13,21 +13,32 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - name: Parse scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\verify-windows.ps1 -SyntaxOnly -Report "$env:RUNNER_TEMP\powershell-syntax.json"
+      - name: Prepare Microsoft Defender for build downloads
+        shell: powershell
+        run: .\scripts\prepare-windows-runner.ps1
+      - name: Select pinned Python
+        id: build-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13.15'
+          architecture: x64
+          check-latest: false
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: powershell
         run: python scripts/release.py --validate-tag
-      - name: Parse scripts with Windows PowerShell 5.1
-        shell: powershell
-        run: .\scripts\verify-windows.ps1 -SyntaxOnly -Report "$env:RUNNER_TEMP\powershell-syntax.json"
       - name: Verify dependencies, test and build installer
         shell: powershell
+        env:
+          BUILD_PYTHON: ${{ steps.build-python.outputs.python-path }}
         run: |
           Start-Transcript -Path "$env:RUNNER_TEMP\package-build.log"
           try {
-            .\scripts\prepare-windows-runner.ps1
-            .\scripts\bootstrap.ps1
+            .\scripts\bootstrap.ps1 -BuildPython $env:BUILD_PYTHON
           } finally {
             Stop-Transcript
           }
@@ -48,19 +59,20 @@ jobs:
           .\scripts\verify-installer.ps1 -Installer $setup.FullName
       - name: Upload installer and dependency inventory
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: win-harden-windows-x64
           path: release-assets/*
           if-no-files-found: error
       - name: Upload build diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-build-diagnostics
           path: |
             ${{ runner.temp }}/powershell-syntax.json
             ${{ runner.temp }}/package-build.log
+            ${{ runner.temp }}/python-install.log
             ${{ runner.temp }}/installer-checks/*.log
             build/**/warn-*.txt
           if-no-files-found: warn
@@ -74,8 +86,8 @@ jobs:
       group: publish-win-harden
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
           name: win-harden-windows-x64
           path: release-assets

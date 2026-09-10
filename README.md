@@ -12,6 +12,12 @@ On Windows 11 x64, open **64-bit Windows PowerShell as Administrator** in this c
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 ```
 
+If the exact pinned Python 3.13 x64 release is already installed, pass its executable explicitly to avoid the Python installer's maintenance mode:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1 -BuildPython "C:\path\to\python.exe"
+```
+
 The bootstrap automatically downloads the pinned Python runtime, Qt, pywin32, PyInstaller, test dependencies, and Inno Setup. Downloads use HTTPS and SHA-256 checks; vendor executables also require the expected Authenticode publisher. Microsoft Defender scans downloaded installers and dependency wheels before they are installed. Verification failure stops the build. Defender must be active with archive scanning enabled; restricted corporate policies may require administrator assistance. The script does not disable antivirus protection or create antivirus exclusions.
 
 The build runs tests and checks the three frozen executables outside the source directory, then produces:

@@ -1,6 +1,6 @@
 <# One command on Windows 11 x64: download, verify, scan, install build dependencies, test, package. #>
 [CmdletBinding()]
-param([switch]$SkipInstaller, [switch]$SkipTests)
+param([switch]$SkipInstaller, [switch]$SkipTests, [string]$BuildPython)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $script:SecurityRoot = $repo
@@ -20,17 +20,31 @@ Initialize-PrivateDirectory -Path $work
 
 $pythonHome = Join-Path $work 'Python313'
 $basePython = Join-Path $pythonHome 'python.exe'
-if (-not (Test-Path -LiteralPath $basePython)) {
+if ($BuildPython) {
+    if (-not (Test-Path -LiteralPath $BuildPython -PathType Leaf)) {
+        throw "The selected build Python does not exist: $BuildPython"
+    }
+    $basePython = (Resolve-Path -LiteralPath $BuildPython).Path
+    Write-Host "Using the selected build Python: $basePython"
+} elseif (-not (Test-Path -LiteralPath $basePython)) {
     Write-Host 'Downloading and verifying the pinned Python installer...'
     $installer = Get-VerifiedDownload -Package $manifest.python -Destination (Join-Path $work 'python-setup.exe')
-    $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=1',"TargetDir=`"$pythonHome`"",'Include_launcher=0','Include_test=0','PrependPath=0','Include_pip=1') -Wait -PassThru
-    if ($process.ExitCode -notin @(0,3010)) { throw "Python setup failed: $($process.ExitCode)" }
+    $pythonInstallLog = Join-Path $(if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $work }) 'python-install.log'
+    $arguments = @('/quiet','InstallAllUsers=1',"TargetDir=$pythonHome",'Include_launcher=0',
+        'Include_test=0','PrependPath=0','Include_pip=1','/log',$pythonInstallLog)
+    $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+    if ($process.ExitCode -notin @(0,3010)) { throw "Python setup failed: $($process.ExitCode). Log: $pythonInstallLog" }
+    if (-not (Test-Path -LiteralPath $basePython -PathType Leaf)) {
+        throw "Python setup exited successfully but did not create $basePython. An existing installation of the same Python version may have entered maintenance mode. Log: $pythonInstallLog"
+    }
 }
-Invoke-CheckedNative $basePython @('-c', "import sys,struct; assert sys.version_info[:3] == (3,13,15) and struct.calcsize('P') == 8, 'Unexpected Python version; remove the old win-harden-build/Python313 directory before rebuilding'")
+$expectedPython = [string]$manifest.python.version
+$checkPython = "import sys,struct; expected=tuple(map(int,sys.argv[1].split('.'))); assert sys.version_info[:3] == expected and struct.calcsize('P') == 8, 'Expected Python %s x64, got %s' % (sys.argv[1], sys.version.split()[0])"
+Invoke-CheckedNative $basePython @('-c',$checkPython,$expectedPython)
 $venv = Join-Path $repo '.venv-build'
 if (-not (Test-Path -LiteralPath (Join-Path $venv 'Scripts\python.exe'))) { Invoke-CheckedNative $basePython @('-m','venv',$venv) }
 $python = Join-Path $venv 'Scripts\python.exe'
-Invoke-CheckedNative $python @('-c', "import sys; assert sys.version_info[:3] == (3,13,15), 'Remove .venv-build and rerun bootstrap with the pinned Python'")
+Invoke-CheckedNative $python @('-c',$checkPython,$expectedPython)
 Write-Host 'Downloading and verifying pinned dependency wheels...'
 $wheels = Join-Path $work 'wheels'
 New-Item -ItemType Directory -Path $wheels -Force | Out-Null
