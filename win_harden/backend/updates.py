@@ -8,9 +8,10 @@ import time
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
-from ..updates import (CHECK_INTERVAL, LATEST_URL, MAX_CHECKSUM, MAX_METADATA,
+from ..updates import (CHECK_INTERVAL, LATEST_URL, MAX_CHECKSUM, MAX_METADATA, RETRY_INTERVAL,
                        InstallerDownload, UpdateError, allowed_download_url,
-                       launch_installer, parse_checksum, parse_release)
+                       cache_directory, launch_installer, parse_checksum,
+                       parse_release, prune_cache)
 from ..version import VERSION
 
 
@@ -152,6 +153,9 @@ class UpdateManager(QObject):
 
     def start(self):
         if self.installed:
+            # A completed upgrade closes this app while setup still holds its
+            # staged installer, so only the next launch can clear that directory.
+            prune_cache(self.cache or cache_directory())
             self.startup.start(10000)
             self.timer.start(60000)
 
@@ -163,9 +167,12 @@ class UpdateManager(QObject):
     def check_if_due(self):
         now = int(self.clock())
         last = self.settings.updates_last_attempt
+        # An attempt is stamped before the request and only confirmed on success,
+        # so an unconfirmed one failed and is retried on the shorter interval.
+        interval = CHECK_INTERVAL if self.settings.updates_last_checked >= last else RETRY_INTERVAL
         if (self.installed and self.settings.check_updates_automatically
                 and not self.active and self.state != "ready"
-                and (last <= 0 or now < last or now - last >= CHECK_INTERVAL)):
+                and (last <= 0 or now < last or now - last >= interval)):
             self.check()
 
     def _status(self, state, message):

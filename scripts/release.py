@@ -42,6 +42,18 @@ def validate_artifacts(folder, tag):
     return files, digest
 
 
+def canonical(release, tag):
+    """Rewrite asset URLs to the form publishing will produce.
+
+    A draft is not bound to its tag, so GitHub serves its assets under a
+    temporary slug. Checking the draft's own URLs would reject every release.
+    """
+    assets = [{**asset, 'browser_download_url':
+               f'https://github.com/{REPOSITORY}/releases/download/{tag}/{asset["name"]}'}
+              for asset in release.get('assets', [])]
+    return {**release, 'draft': False, 'assets': assets}
+
+
 def api(path, method='GET', body=None):
     raw = None if body is None else json.dumps(body).encode()
     request = Request('https://api.github.com/repos/' + REPOSITORY + path, data=raw, method=method,
@@ -66,11 +78,9 @@ def publish(folder, tag):
         latest_tag = latest.get('tag_name', '')
         if not latest_tag.startswith('v') or version_tuple(latest_tag[1:]) >= version_tuple(VERSION):
             raise ValueError('The new release must be newer than the latest public release.')
-    try:
-        release = api('/releases/tags/' + tag)
-    except HTTPError as exc:
-        if exc.code != 404:
-            raise
+    # /releases/tags never returns drafts, so a rerun would post a duplicate.
+    release = next((r for r in api('/releases?per_page=100') if r.get('tag_name') == tag), None)
+    if release is None:
         release = api('/releases', 'POST', {
             'tag_name': tag, 'name': 'Windows Firewall & Hardening ' + VERSION,
             'draft': True, 'prerelease': False, 'generate_release_notes': True,
@@ -92,11 +102,20 @@ def publish(folder, tag):
             digest = hashlib.file_digest(source, 'sha256').hexdigest()
         if asset.get('state') != 'uploaded' or asset.get('size') != path.stat().st_size or asset.get('digest') != 'sha256:' + digest:
             raise ValueError('Uploaded asset failed verification: ' + asset['name'])
-    candidate = parse_release({**release, 'draft': False}, '0.0.0')
+    candidate = parse_release(canonical(release, tag), '0.0.0')
     if candidate is None or candidate.digest != checksum:
         raise ValueError('The uploaded release cannot be consumed by the updater.')
     # All assets are validated before the release becomes discoverable.
     api('/releases/' + str(release['id']), 'PATCH', {'draft': False, 'make_latest': 'true'})
+    # The published payload is the one clients parse. Withdraw it if it differs
+    # from what was verified, so a bad release is never left discoverable.
+    try:
+        published = parse_release(api('/releases/' + str(release['id'])), '0.0.0')
+        if published is None or published.digest != checksum:
+            raise ValueError('The published release cannot be consumed by the updater.')
+    except Exception:
+        api('/releases/' + str(release['id']), 'PATCH', {'draft': True})
+        raise
     print(release['html_url'])
 
 

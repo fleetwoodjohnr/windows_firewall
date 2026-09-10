@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from win_harden.backend.updates import HttpTransfer, UpdateManager
 from win_harden.settings import AppSettings
-from win_harden.updates import (CHECK_INTERVAL, LATEST_URL, REPOSITORY,
+from win_harden.updates import (CHECK_INTERVAL, LATEST_URL, REPOSITORY, RETRY_INTERVAL,
     InstallerDownload, UpdateError, allowed_download_url, parse_checksum,
     parse_release, version_tuple)
 
@@ -395,3 +395,54 @@ def test_download_write_failure_reports_error(manager, monkeypatch):
     manager.fake.respond(PAYLOAD)
     assert manager.state == 'error' and 'Disk full' in manager.message
     assert not stage.directory.exists() and not manager.launched
+
+
+def test_a_failed_check_retries_sooner_than_a_successful_one(manager):
+    manager.check()
+    manager.fake.respond(status=403, error='rate limited')
+    assert manager.state == 'error'
+    count = len(manager.fake.requests)
+
+    # The attempt was stamped before the request, so without the shorter
+    # interval a rate limit or a dropped link would cost a whole day.
+    manager.clock = lambda: 1000000 + RETRY_INTERVAL - 60
+    manager.check_if_due()
+    assert len(manager.fake.requests) == count
+
+    manager.clock = lambda: 1000000 + RETRY_INTERVAL
+    manager.check_if_due()
+    assert len(manager.fake.requests) == count + 1
+
+
+def test_a_successful_check_still_waits_a_full_day(manager):
+    offer_update(manager)
+    count = len(manager.fake.requests)
+    manager.clock = lambda: 1000000 + RETRY_INTERVAL
+    manager.check_if_due()
+    assert len(manager.fake.requests) == count
+
+
+def test_staging_directories_from_earlier_attempts_are_removed(manager, tmp_path):
+    root = tmp_path / 'updates'
+    root.mkdir(parents=True, exist_ok=True)
+    stale = root / '1.2.5-abcdef'
+    stale.mkdir()
+    (stale / 'WinHardenSetup-1.2.5.exe').write_bytes(b'MZ-leftover')
+    loose = root / 'not-a-directory'
+    loose.write_bytes(b'')
+
+    offer_update(manager)
+    manager.update()
+    assert not stale.exists()
+    assert manager.download.directory.exists()
+    assert loose.exists()
+
+
+def test_startup_clears_an_installer_left_behind_by_a_completed_upgrade(manager, tmp_path):
+    root = tmp_path / 'updates'
+    root.mkdir(parents=True, exist_ok=True)
+    orphan = root / '1.2.9-fedcba'
+    orphan.mkdir()
+    (orphan / 'WinHardenSetup-1.2.9.exe').write_bytes(b'MZ-left-by-setup')
+    manager.start()
+    assert not orphan.exists()

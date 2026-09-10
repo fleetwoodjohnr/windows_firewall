@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 from urllib.parse import urlsplit
 
@@ -15,6 +16,9 @@ MAX_INSTALLER = 1024 * 1024 * 1024
 MAX_METADATA = 1024 * 1024
 MAX_CHECKSUM = 4096
 CHECK_INTERVAL = 24 * 60 * 60
+# A failed attempt still stamps the attempt time, so retry sooner than the daily
+# cadence rather than losing a day to a rate limit or a dropped connection.
+RETRY_INTERVAL = 30 * 60
 
 
 class UpdateError(ValueError):
@@ -86,6 +90,9 @@ def parse_release(data, current_version):
 
     installer = asset(filename, MAX_INSTALLER)
     checksum = asset(filename + ".sha256", MAX_CHECKSUM)
+    # Corroborates the published checksum when GitHub supplies it. Deliberately
+    # optional: requiring it would strand every installed client if the API ever
+    # stopped returning it, and release.py already refuses to publish without it.
     digest = installer.get("digest")
     if digest is not None:
         if not isinstance(digest, str) or not re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest):
@@ -118,6 +125,24 @@ def cache_directory():
     return Path(base) / "win-harden" / "updates"
 
 
+def prune_cache(root, keep=None):
+    """Drop staging directories from earlier attempts.
+
+    A successful upgrade closes this app while setup is still running, so the
+    directory it is using is deliberately left behind and nothing else ever
+    removes it. One in use cannot be deleted, and is skipped.
+    """
+    keep = Path(keep).resolve() if keep is not None else None
+    try:
+        entries = sorted(Path(root).iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.is_dir() or entry.resolve() == keep:
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+
+
 class InstallerDownload:
     """A unique staging directory; never reuse an executable from an earlier run."""
 
@@ -127,6 +152,7 @@ class InstallerDownload:
         root = Path(root) if root is not None else cache_directory()
         root.mkdir(parents=True, exist_ok=True)
         self.directory = Path(tempfile.mkdtemp(prefix=release.version + "-", dir=root))
+        prune_cache(root, keep=self.directory)
         self.partial = self.directory / (release.filename + ".partial")
         self.path = self.directory / release.filename
         self.file = self.partial.open("xb")
@@ -165,7 +191,7 @@ class InstallerDownload:
             pass
 
 
-class InstallerProcess:  # pragma: no cover - Windows integration
+class InstallerProcess:
     def __init__(self, handle):
         self.handle = handle
 
@@ -179,7 +205,21 @@ class InstallerProcess:  # pragma: no cover - Windows integration
         self.handle.Close()
 
 
-def launch_installer(path, checksum):  # pragma: no cover - Windows integration
+def verify_staged_installer(path, checksum):
+    """Re-hash immediately before handing the file to Windows.
+
+    The caller holds it open against writes and deletion, so this closes the
+    window between verifying the download and executing it.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != checksum:
+        raise UpdateError("The installer changed after verification. Download it again.")
+
+
+def launch_installer(path, checksum):
     """Recheck while denying writes/deletion; let Inno elevate its own child.
 
     Using 'runas' here would lose Inno's original user and could relaunch the GUI
@@ -193,12 +233,7 @@ def launch_installer(path, checksum):  # pragma: no cover - Windows integration
     handle = win32file.CreateFile(path, win32con.GENERIC_READ, win32con.FILE_SHARE_READ,
                                   None, win32con.OPEN_EXISTING, 0, None)
     try:
-        digest = hashlib.sha256()
-        with open(path, "rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        if digest.hexdigest() != checksum:
-            raise UpdateError("The installer changed after verification. Download it again.")
+        verify_staged_installer(path, checksum)
         result = shell.ShellExecuteEx(fMask=shellcon.SEE_MASK_NOCLOSEPROCESS,
             lpVerb="open", lpFile=path, lpParameters="/NORESTART", lpDirectory=str(Path(path).parent),
             nShow=win32con.SW_SHOWNORMAL)

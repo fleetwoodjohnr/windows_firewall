@@ -47,19 +47,25 @@ Get-FileHash .\WinHardenSetup-1.2.0.exe -Algorithm SHA256
 
 Windows Server CI builds the package; it does not establish Windows 11 acceptance. Run the checklist below on the target laptop.
 
-Pinned build inputs are in `requirements-win.lock` and `scripts/downloads.json`. Upstream changes, including changes to the vendor's unversioned Sysmon archive, fail verification until the manifest is reviewed and updated. Build staging is under `%ProgramData%\win-harden-build`. Installers are unsigned and can show an unknown-publisher prompt. SHA-256 checks establish integrity against the release assets, not a code-signing identity.
+Pinned build inputs are in `requirements-win.lock` and `scripts/downloads.json`. Upstream changes, including changes to the vendor's unversioned Sysmon archive, fail verification until the manifest is reviewed and updated. Build staging is under `%ProgramData%\win-harden-build`.
+
+### Unsigned installers and SmartScreen
+
+The installer is not code-signed, so Windows shows **Windows protected your PC**. Choose **More info**, confirm the app name, then **Run anyway**. The UAC prompt that follows reports `Publisher: Unknown`. This is expected and will keep happening for every release; signing is the only thing that removes it.
+
+Because there is no publisher identity, verify the download yourself before running it. Compare the output of the `Get-FileHash` command above against the `.sha256` asset published beside the installer; they must match exactly. SHA-256 establishes integrity against the release assets, not a code-signing identity.
 
 ## Application updates
 
-Open **Updates** or select **Check for application updates** in the tray menu. The installed app checks after startup when due and once every 24 hours while running. It notifies you once per available version. Turn off automatic checks on the Updates page if you prefer to check manually.
+Open **Updates** or select **Check for application updates** in the tray menu. The installed app checks after startup when due and once every 24 hours while running. It notifies you once per available version. A check that fails because the PC is offline or GitHub rate-limits it retries after 30 minutes rather than waiting a full day. Turn off automatic checks on the Updates page if you prefer to check manually.
 
 Click **Update** to download the complete installer. The app checks its size and SHA-256 checksum before opening the upgrade wizard. Downloading does not require administrator rights; installing does. The GUI stays running until setup asks to close it, so cancelling administrator approval or leaving the wizard before installation keeps monitoring available. No source checkout, Git account, Python installation, or subscription is needed on the target PC.
 
 During an upgrade, the scanner service stops, the application files are replaced, and the service starts again. Preferences, watched folders, history, queued scan records, and the original-settings journal are retained. Active scans may be interrupted and reported incomplete. Wait for security changes to finish before upgrading. Close the app and **Exit monitor** in other signed-in accounts when setup requests it, then reopen their monitors afterward. Cancelling setup before replacement restarts the old service; failures during installation require rerunning the same installer to repair it. Same-version repair is supported; newer installers refuse downgrades.
 
-Downloads are staged under `%LocalAppData%\win-harden\updates`. Invalid and cancelled downloads are removed. A launched installer may remain cached until uninstall and can be removed after setup finishes. Offline checks, GitHub rate limits, missing assets and corrupt downloads produce a message on the Updates page. They do not replace application files. Development checkouts can check releases but cannot install updates.
+Downloads are staged under `%LocalAppData%\win-harden\updates`. Invalid and cancelled downloads are removed. A completed upgrade closes the app while setup is still running, so that installer is cleared on the next launch instead. A launched installer may remain cached until uninstall and can be removed after setup finishes. Offline checks, GitHub rate limits, missing assets and corrupt downloads produce a message on the Updates page. They do not replace application files. Development checkouts can check releases but cannot install updates.
 
-Version 1.2.0 introduces the updater. Users of 1.1.0 must install the first updater-enabled version manually; subsequent releases can be installed through the app. Defender definition updates remain a separate action on **Virus Scan**.
+Version 1.2.0 is the first published release and introduces the updater, so it has to be installed manually from GitHub Releases; there is no earlier release to update from. Every version after it can be installed through the app. Defender definition updates remain a separate action on **Virus Scan**.
 
 ### Publishing a new version
 
@@ -73,6 +79,10 @@ Version 1.2.0 introduces the updater. Users of 1.1.0 must install the first upda
    ```
 
 The tag workflow checks the version, builds and tests the installer, then creates a draft GitHub Release. It uploads the installer, checksum and dependency inventory, verifies their sizes and GitHub SHA-256 digests, and publishes the complete release as latest. Build and upload failures leave no public update. Resolve the failure and rerun a draft release's workflow; an already-published release must be followed by a new version. Branch pushes and pull requests only create build artifacts.
+
+A release is created as a draft, and only becomes public after its uploaded assets are verified and the published release is re-read and parsed the way the updater parses it. A release that cannot be consumed is returned to draft rather than left discoverable. Re-running the job for the same tag reuses the existing draft instead of creating a second one.
+
+Signing, if a certificate is ever obtained, attaches in `scripts/build.ps1` between the Inno Setup compile and the `Get-FileHash` sidecar, and to the three executables before PyInstaller collects them. No signing code is present today.
 
 The publishing job uses GitHub's built-in workflow token with `contents: write`; no token is included in the installed application. Repository or organization policy must allow that job to write releases. Installer compilation requires Windows; it cannot be produced by running the Python build on Linux.
 

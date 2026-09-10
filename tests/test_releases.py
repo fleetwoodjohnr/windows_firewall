@@ -31,7 +31,7 @@ def uploaded(folder):
         for p in folder.iterdir()]
 
 
-def mock_publish(monkeypatch, assets, change=None):
+def mock_publish(monkeypatch, assets, change=None, existing=(), on_publish=None):
     calls = []
     metadata = dict(id=42, draft=True, prerelease=False, tag_name='v' + release.VERSION,
         html_url='https://github.com/' + release.REPOSITORY + '/releases/tag/v' + release.VERSION,
@@ -42,6 +42,19 @@ def mock_publish(monkeypatch, assets, change=None):
         calls.append((path, method, body))
         if path.startswith('/releases/tags/') or path == '/releases/latest':
             raise HTTPError(path, 404, 'Missing', {}, None)
+        if path.startswith('/releases?'):
+            return existing
+        if method == 'PATCH':
+            metadata.update(body)
+            if body.get('draft') is False:
+                # Publishing binds the release to its tag, which is when GitHub
+                # moves its assets off the draft's temporary slug.
+                for asset in metadata['assets']:
+                    asset['browser_download_url'] = (
+                        f'https://github.com/{release.REPOSITORY}/releases/download/'
+                        f'v{release.VERSION}/' + asset['name'])
+                if on_publish:
+                    on_publish(metadata)
         return metadata
     monkeypatch.setenv('GITHUB_REPOSITORY', release.REPOSITORY)
     monkeypatch.setattr(release, 'api', api)
@@ -52,9 +65,12 @@ def mock_publish(monkeypatch, assets, change=None):
 def test_complete_release_is_published_after_upload_verification(monkeypatch, assets):
     calls = mock_publish(monkeypatch, assets)
     release.publish(assets, 'v' + release.VERSION)
-    assert calls[-1] == ('/releases/42', 'PATCH', {'draft': False, 'make_latest': 'true'})
-    assert next(i for i, c in enumerate(calls) if c[0] == 'upload') < len(calls) - 2
+    publish_at = calls.index(('/releases/42', 'PATCH', {'draft': False, 'make_latest': 'true'}))
+    assert next(i for i, c in enumerate(calls) if c[0] == 'upload') < publish_at - 1
     assert next(c for c in calls if c[1] == 'POST')[2]['draft'] is True
+    # The published payload is re-read, and nothing withdraws it.
+    assert calls[publish_at + 1] == ('/releases/42', 'GET', None)
+    assert not [c for c in calls if c[2] == {'draft': True}]
 
 
 @pytest.mark.parametrize('change', [
@@ -124,3 +140,36 @@ def test_older_tag_cannot_replace_latest(monkeypatch, assets):
     with pytest.raises(ValueError, match='newer'):
         release.publish(assets, 'v' + release.VERSION)
     assert not any(c[1] in ('POST', 'PATCH') or c[0] == 'upload' for c in calls)
+
+
+def test_draft_slug_urls_do_not_block_publishing(monkeypatch, assets):
+    # A draft is not bound to its tag, so GitHub serves its assets under a
+    # temporary slug. Publishing must still verify and complete.
+    def slugged(metadata):
+        for asset in metadata['assets']:
+            asset['browser_download_url'] = (
+                f'https://github.com/{release.REPOSITORY}/releases/download/untagged-9f8e7d6c/' + asset['name'])
+    calls = mock_publish(monkeypatch, assets, change=slugged)
+    release.publish(assets, 'v' + release.VERSION)
+    assert ('/releases/42', 'PATCH', {'draft': False, 'make_latest': 'true'}) in calls
+    assert not [c for c in calls if c[2] == {'draft': True}]
+
+
+def test_existing_draft_is_reused_instead_of_duplicated(monkeypatch, assets):
+    draft = dict(id=42, draft=True, tag_name='v' + release.VERSION)
+    calls = mock_publish(monkeypatch, assets, existing=[draft])
+    release.publish(assets, 'v' + release.VERSION)
+    assert not [c for c in calls if c[1] == 'POST']
+
+
+def test_published_release_is_withdrawn_when_unusable(monkeypatch, assets):
+    # A release GitHub serves differently from what was verified must not be
+    # left discoverable just because the draft checks passed.
+    def break_on_publish(metadata):
+        installer = f'WinHardenSetup-{release.VERSION}.exe'
+        next(a for a in metadata['assets'] if a['name'] == installer)[
+            'browser_download_url'] = 'https://evil.example/setup.exe'
+    calls = mock_publish(monkeypatch, assets, on_publish=break_on_publish)
+    with pytest.raises(ValueError):
+        release.publish(assets, 'v' + release.VERSION)
+    assert calls[-1] == ('/releases/42', 'PATCH', {'draft': True})
