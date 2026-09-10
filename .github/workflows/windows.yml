@@ -26,6 +26,7 @@ jobs:
         run: |
           Start-Transcript -Path "$env:RUNNER_TEMP\package-build.log"
           try {
+            .\scripts\prepare-windows-runner.ps1
             .\scripts\bootstrap.ps1
           } finally {
             Stop-Transcript

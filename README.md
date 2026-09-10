@@ -37,6 +37,8 @@ Download the installer and its `.sha256` file from [GitHub Releases](https://git
 
 Development builds are also available from successful [Windows package workflow runs](https://github.com/fleetwoodjohnr/windows_firewall/actions/workflows/windows.yml), in the `win-harden-windows-x64` artifact. A failed workflow does not produce an installer. Download `windows-build-diagnostics` from that run for the build transcript and syntax report.
 
+The GitHub-hosted Windows image disables some Defender protections and excludes its build drives. The workflow first enables the protections required for scanning and removes the image's `C:\` and `D:\` exclusions on that disposable runner. This preparation script refuses to run outside GitHub-hosted CI and is not included in the installed application. Dependency scans remain mandatory.
+
 Confirm the hash on the target PC before running a manually downloaded installer:
 
 ```powershell

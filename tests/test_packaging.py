@@ -113,6 +113,17 @@ class TestBuildScript:
 
 
 class TestBootstrap:
+    def test_hosted_runner_is_prepared_without_weakening_download_checks(self):
+        preparation = (ROOT / 'scripts' / 'prepare-windows-runner.ps1').read_text()
+        workflow = (ROOT / '.github' / 'workflows' / 'windows.yml').read_text()
+        assert "RUNNER_ENVIRONMENT -ne 'github-hosted'" in preparation
+        assert "GITHUB_ACTIONS -ne 'true'" in preparation
+        assert preparation.index('throw') < preparation.index('Set-MpPreference')
+        assert '-DisableArchiveScanning $false' in preparation
+        assert 'Remove-MpPreference -ExclusionPath $path' in preparation
+        assert workflow.index('prepare-windows-runner.ps1') < workflow.index('scripts\\bootstrap.ps1')
+        assert 'prepare-windows-runner' not in ISS
+
     def test_dependencies_pinned_hashed_and_scanned_before_install(self):
         lock = (ROOT / 'requirements-win.lock').read_text().lower()
         for package in ('pyside6', 'pywin32', 'pyinstaller'):

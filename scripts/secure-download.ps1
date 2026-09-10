@@ -18,7 +18,13 @@ function Assert-ScannedFile {
     if ($LASTEXITCODE -ne 0) { throw "Defender failed to scan $Path" }
     $result = ($raw -join "`n") | ConvertFrom-Json
     if ($result.error -or $result.exitCode -ne 0 -or -not $result.scanCompleted -or $result.excluded -or @($result.threats).Count) {
-        throw "Download was not verified clean: $Path. $($result.error) Review Windows Security."
+        $reason = if ($result.error) { [string]$result.error }
+            elseif ($result.excluded) { 'The file is excluded from Microsoft Defender scanning. Review ExclusionPath and archive scanning settings.' }
+            elseif (@($result.threats).Count) { 'Microsoft Defender reported a threat. Review Windows Security.' }
+            elseif ($result.exitCode -ne 0) { "Microsoft Defender exited with code $($result.exitCode)." }
+            else { 'Microsoft Defender did not provide a matching scan-completion event.' }
+        Write-Host ('Defender verification result: ' + ($result | ConvertTo-Json -Depth 6 -Compress))
+        throw "Download was not verified clean: $Path. $reason"
     }
     if (-not (Test-Path -LiteralPath $Path) -or (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -ne $before) {
         throw 'The download changed during scanning. It will not be executed.'
