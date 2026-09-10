@@ -118,7 +118,9 @@ class TestBuildScript:
         gui_runner = (ROOT / 'win_harden/backend/powershell.py').read_text()
         broker_runner = (ROOT / 'broker/psrun.py').read_text()
         scanner_runner = (ROOT / 'scanner/engine.py').read_text()
-        assert 'configure_qprocess_no_window(process)' in gui_runner
+        assert 'popen_factory(' in gui_runner
+        assert 'creationflags=creation_flags()' in gui_runner
+        assert 'QProcess' not in gui_runner
         assert 'creationflags=creation_flags()' in broker_runner
         assert 'creationflags=creation_flags()' in scanner_runner
         extra = ISS.split("procedure RunExtra", 1)[1].split("end;", 1)[0]

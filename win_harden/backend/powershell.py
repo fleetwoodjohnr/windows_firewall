@@ -1,46 +1,155 @@
-"""Async PowerShell runner for the GUI's unelevated reads.
+"""Asynchronous PowerShell runner for the GUI's unelevated reads.
 
-The direct counterpart of the Fedora app's `NetworkManagerClient._run`
-(backend/networkmanager.py:52-80): an argv list, never a shell, run through the
-toolkit's own subprocess type so nothing blocks the main loop. `Gio.Subprocess`
-becomes `QProcess`; the callback shape is unchanged.
+The Fedora application uses an asynchronous subprocess API for status reads.
+On Windows, Qt's Python bindings do not expose the native process modifier that
+is needed to pass ``CREATE_NO_WINDOW``. A short-lived Python worker thread is
+therefore used for each read. The thread waits for ``subprocess.Popen`` while
+the Qt main loop remains responsive, and completion is marshalled back to the
+GUI thread through a queued Qt signal.
 
 This runs only the read-only scripts. Every write goes to the broker, and
-`psinvoke.is_read_only` is checked here rather than assumed, so a write script
+``psinvoke.is_read_only`` is checked here rather than assumed, so a write script
 cannot be run unelevated by mistake and silently half-succeed.
 """
 
 import json
+import subprocess
+import threading
 
-from PySide6.QtCore import QObject, QProcess
+from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from broker.psinvoke import InvocationError, build_argv, is_read_only
-from broker.winprocess import configure_qprocess_no_window
+from broker.winprocess import creation_flags
 
 from .errors import PowerShellError, PowerShellNotFound, translate_powershell_error
 
 # Reads are quick. This is a backstop against a wedged WMI provider, which is a
 # real and well-known way for Get-NetFirewallRule to hang forever.
-READ_TIMEOUT_MS = 60_000
+READ_TIMEOUT_SECONDS = 60
+
+
+class _ReadCall:
+    """Thread-safe ownership of one child process.
+
+    ``cancel`` may run on the Qt thread while ``execute`` is starting or waiting
+    on the worker thread. The lock closes the small race where shutdown begins
+    just before Popen publishes the new process handle.
+    """
+
+    def __init__(self, argv, script):
+        self.argv = argv
+        self.script = script
+        self.thread = None
+        self._lock = threading.Lock()
+        self._process = None
+        self._cancelled = False
+
+    def publish_process(self, process):
+        with self._lock:
+            self._process = process
+            cancelled = self._cancelled
+        if cancelled:
+            _kill(process)
+
+    def clear_process(self, process):
+        with self._lock:
+            if self._process is process:
+                self._process = None
+
+    def cancel(self):
+        with self._lock:
+            self._cancelled = True
+            process = self._process
+        if process is not None:
+            _kill(process)
+
+    @property
+    def cancelled(self):
+        with self._lock:
+            return self._cancelled
+
+
+def _kill(process):
+    """Best-effort termination used by timeout and application shutdown."""
+    try:
+        if process.poll() is None:
+            process.kill()
+    except (OSError, ProcessLookupError):
+        # The child may exit between poll() and kill(). That is completion, not
+        # a new user-facing failure.
+        pass
+
+
+def _run_read(call, timeout=READ_TIMEOUT_SECONDS, popen_factory=subprocess.Popen):
+    """Run one already-validated read and return ``(result, error)``.
+
+    Kept separate from the Qt orchestration so process creation, parsing,
+    timeout handling, and the no-console flag can be exercised directly.
+    """
+    if call.cancelled:
+        return None, PowerShellError("the application is closing")
+
+    try:
+        process = popen_factory(
+            call.argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8-sig",
+            errors="replace",
+            shell=False,
+            creationflags=creation_flags(),
+        )
+    except (FileNotFoundError, OSError) as e:
+        return None, PowerShellNotFound(f"couldn't run powershell.exe: {e}")
+
+    call.publish_process(process)
+    try:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill(process)
+            # Reap the process and close its pipe handles after termination.
+            process.communicate()
+            return None, PowerShellError(
+                f"{call.script} didn't finish within {timeout} seconds")
+    finally:
+        call.clear_process(process)
+
+    if call.cancelled:
+        return None, PowerShellError("the application is closing")
+    if process.returncode != 0:
+        return None, translate_powershell_error(
+            process.returncode, (stderr or stdout or "").strip())
+
+    text = (stdout or "").strip()
+    if not text:
+        return {}, None
+    try:
+        parsed = json.loads(text)
+    except ValueError as e:
+        return None, PowerShellError(
+            f"{call.script} produced output that isn't JSON: {e}")
+    return (parsed if isinstance(parsed, dict) else {"items": parsed}), None
 
 
 class PowerShellRunner(QObject):
-    """One runner, many concurrent reads.
+    """Run concurrent status reads without blocking or opening a console."""
 
-    Each call owns its QProcess and is parented to this object so that closing
-    the window tears down anything still in flight rather than leaving orphaned
-    powershell.exe processes behind.
-    """
+    _completed = Signal(int, object, object)
 
     def __init__(self, parent=None, script_root=None):
         super().__init__(parent)
         self._script_root = script_root
-        # id(process) -> (process, finish). Keyed by id rather than held as a
-        # list so shutdown can complete each pending call.
         self._running = {}
+        self._next_token = 1
+        # Force queuing even though the signal belongs to this QObject: it is
+        # emitted by Python worker threads, while callbacks update Qt widgets.
+        self._completed.connect(self._on_completed, Qt.ConnectionType.QueuedConnection)
 
     def run(self, script, params=None, callback=None):
-        """callback(result: dict | None, error: WinHardenError | None)"""
+        """Call ``callback(result, error)`` on the Qt thread when the read ends."""
         callback = callback or (lambda *_args: None)
 
         if not is_read_only(script):
@@ -56,111 +165,49 @@ class PowerShellRunner(QObject):
             callback(None, PowerShellError(str(e)))
             return
 
-        process = QProcess(self)
+        token = self._next_token
+        self._next_token += 1
+        call = _ReadCall(argv, script)
+        thread = threading.Thread(
+            target=self._execute,
+            args=(token, call),
+            name=f"win-harden-read-{token}",
+            daemon=True,
+        )
+        call.thread = thread
+        self._running[token] = (call, callback)
+        thread.start()
+
+    def _execute(self, token, call):
+        result, error = _run_read(call)
         try:
-            configure_qprocess_no_window(process)
-        except RuntimeError as e:
-            process.deleteLater()
-            callback(None, PowerShellError(str(e)))
+            self._completed.emit(token, result, error)
+        except RuntimeError:
+            # A daemon worker may outlive the one-second shutdown grace period
+            # only if Windows itself is wedged. The QObject can be gone then;
+            # there is no window left to receive this result.
+            pass
+
+    @Slot(int, object, object)
+    def _on_completed(self, token, result, error):
+        record = self._running.pop(token, None)
+        if record is None:
+            # Shutdown already completed this callback while the worker was
+            # unwinding its killed child process.
             return
-
-        # `finished` and the timeout are made mutually exclusive by this flag,
-        # the same guard the broker client uses: a late timeout must not fire
-        # after a completion, and vice versa.
-        state = {"done": False, "timer": None}
-
-        def finish(result, error):
-            if state["done"]:
-                return
-            state["done"] = True
-            timer = state["timer"]
-            if timer is not None:
-                timer.stop()
-                timer.deleteLater()
-            self._running.pop(id(process), None)
-            # Disconnect before deleting. Qt can still emit finished() or
-            # errorOccurred() for a process that is on its way out, and a handler
-            # that runs after deleteLater() touches a C++ object Python still has
-            # a wrapper for -- which raises inside a signal handler, where there
-            # is nobody to catch it.
-            try:
-                process.finished.disconnect()
-                process.errorOccurred.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            process.deleteLater()
-            callback(result, error)
-
-        def on_finished(exit_code, _exit_status):
-            # Qt can deliver finished() and errorOccurred() for the same run, and
-            # `finish` has already called deleteLater() by the time the second
-            # arrives. Reading anything off the QProcess after that raises on the
-            # deleted C++ object, so the guard has to come before the first touch
-            # rather than inside `finish`.
-            if state["done"]:
-                return
-            stdout = bytes(process.readAllStandardOutput()).decode("utf-8", "replace")
-            stderr = bytes(process.readAllStandardError()).decode("utf-8", "replace")
-            if exit_code != 0:
-                finish(None, translate_powershell_error(exit_code, stderr))
-                return
-            text = stdout.strip()
-            if not text:
-                finish({}, None)
-                return
-            try:
-                parsed = json.loads(text)
-            except ValueError as e:
-                finish(None, PowerShellError(f"{script} produced output that isn't JSON: {e}"))
-                return
-            finish(parsed if isinstance(parsed, dict) else {"items": parsed}, None)
-
-        def on_error(_error):
-            if state["done"]:
-                return
-            # Read the message while the object is still alive.
-            message = process.errorString()
-            finish(None, PowerShellNotFound(f"couldn't run powershell.exe: {message}"))
-
-        process.finished.connect(on_finished)
-        process.errorOccurred.connect(on_error)
-        # Keyed by id so shutdown can finish each pending call rather than
-        # killing the process and leaving its caller waiting forever.
-        self._running[id(process)] = (process, finish)
-
-        from PySide6.QtCore import QTimer  # noqa: PLC0415
-
-        def on_timeout():
-            if state["done"]:
-                return
-            process.kill()
-            finish(None, PowerShellError(
-                f"{script} didn't finish within {READ_TIMEOUT_MS // 1000} seconds"))
-
-        # Parented to the runner, not to the process: a timer owned by the
-        # QProcess would be destroyed by deleteLater() mid-callback.
-        timer = QTimer(self)
-        timer.setSingleShot(True)
-        timer.timeout.connect(on_timeout)
-        timer.start(READ_TIMEOUT_MS)
-        state["timer"] = timer
-
-        process.start(argv[0], argv[1:])
+        _call, callback = record
+        callback(result, error)
 
     def shutdown(self):
-        """Kill anything in flight AND complete its callback.
-
-        Killing without finishing was a real bug: the call stayed live with its
-        signals connected, and Qt then emitted errorOccurred on a process that
-        had already been destroyed. Every pending call gets an answer, which is
-        the same rule the broker client follows -- a caller left waiting on a
-        reply that never comes is a control greyed out forever.
-        """
-        for process, finish in list(self._running.values()):
-            finish(None, PowerShellError("the application is closing"))
-            process.kill()
-            # Bounded wait so the child is reaped before its wrapper goes away.
-            # Without it Qt warns "Destroyed while process is still running" on
-            # every exit, which is noise that trains you to ignore the log.
-            process.waitForFinished(200)
+        """Stop child processes and complete every outstanding callback once."""
+        records = list(self._running.values())
         self._running.clear()
+
+        for call, _callback in records:
+            call.cancel()
+        for _call, callback in records:
+            callback(None, PowerShellError("the application is closing"))
+        for call, _callback in records:
+            # kill() makes communicate() return promptly. Keep this wait bounded
+            # so a broken OS process provider can never trap application exit.
+            call.thread.join(timeout=1.0)

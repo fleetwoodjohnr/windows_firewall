@@ -1,9 +1,9 @@
 """Synchronous PowerShell runner for the elevated broker.
 
-The GUI has its own async runner built on QProcess (win_harden/backend/powershell.py)
-because it must never block the UI. The broker is a single-threaded request loop
-that is already inside a call the GUI is waiting on, so here blocking is correct
-and simpler.
+The GUI has its own threaded async runner (win_harden/backend/powershell.py)
+because it must never block the UI. The broker is a single-threaded request
+loop that is already inside a call the GUI is waiting on, so here blocking is
+correct and simpler.
 
 Both build their argv through `psinvoke.build_argv`, which is the only place
 allowed to decide what may be executed.

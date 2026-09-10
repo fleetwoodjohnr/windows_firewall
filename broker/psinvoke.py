@@ -2,8 +2,8 @@
 
 Shared, like `protocol.py` and `registry_txn.py`: the broker runs these commands
 elevated via `subprocess`, the GUI runs the read-only ones unelevated via
-`QProcess`, and both build their argv here so there is exactly one definition of
-what may be executed.
+`subprocess.Popen`, and both build their argv here so there is exactly one
+definition of what may be executed.
 
 The Fedora helper's rule was "No shell, anywhere. subprocess is always called
 with an argv list." An argv list is necessary on Windows too, but on its own it
