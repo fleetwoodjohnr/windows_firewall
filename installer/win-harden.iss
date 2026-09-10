@@ -35,9 +35,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
-Name: "extras-defender"; Description: "Update Microsoft Defender definitions"; GroupDescription: "Optional extras:"; Flags: unchecked
-Name: "extras-sysmon"; Description: "Install Microsoft Sysmon with vendor defaults"; GroupDescription: "Optional extras:"; Flags: unchecked
-Name: "extras-lgpo"; Description: "Open Microsoft's security baseline download page"; GroupDescription: "Optional extras:"; Flags: unchecked
+Name: "extras_defender"; Description: "Update Microsoft Defender definitions"; GroupDescription: "Optional extras:"; Flags: unchecked
+Name: "extras_sysmon"; Description: "Install Microsoft Sysmon with vendor defaults"; GroupDescription: "Optional extras:"; Flags: unchecked
+Name: "extras_lgpo"; Description: "Open Microsoft's security baseline download page"; GroupDescription: "Optional extras:"; Flags: unchecked
 
 [Files]
 Source: "..\dist\win-harden\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -56,7 +56,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\win-harden.exe"; Tasks: deskt
 Name: "{commonstartup}\WinHarden download monitor"; Filename: "{app}\win-harden.exe"; Parameters: "--background"
 
 [Run]
-Filename: "https://www.microsoft.com/en-us/download/details.aspx?id=55319"; Tasks: extras-lgpo; Flags: shellexec runasoriginaluser
+Filename: "https://www.microsoft.com/en-us/download/details.aspx?id=55319"; Tasks: extras_lgpo; Flags: shellexec runasoriginaluser
 Filename: "{app}\win-harden.exe"; Description: "Open {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
@@ -147,8 +147,8 @@ begin
     if not RunHelper('win-harden-scanner.exe', '--install') then
       RaiseException('The scan service could not be installed or started. Run setup again to repair it.');
     ScannerReady := True;
-    RunExtra('extras-defender', '-DefenderSignatures');
-    RunExtra('extras-sysmon', '-Sysmon');
+    RunExtra('extras_defender', '-DefenderSignatures');
+    RunExtra('extras_sysmon', '-Sysmon');
   end;
 end;
 

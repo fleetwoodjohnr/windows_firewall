@@ -198,6 +198,13 @@ class TestScanCompletion:
 
 
 class TestInstaller:
+    def test_task_names_are_valid_for_inno_setup(self):
+        names = re.findall(r'^Name: "([^"]+)";', ISS.split('[Tasks]', 1)[1].split('[Files]', 1)[0], re.MULTILINE)
+        assert names, "the installer declares no tasks"
+        for name in names:
+            assert re.fullmatch(r'[A-Za-z_][A-Za-z0-9_\\/]*', name), (
+                f"Inno Setup task name contains invalid characters: {name}")
+
     def test_reverts_before_removing_files(self):
         """The broker doing the reverting is one of the files being removed, so
         order is load-bearing."""
