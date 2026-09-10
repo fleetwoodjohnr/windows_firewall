@@ -187,7 +187,10 @@ class TestPersistence:
         path = os.path.join(tmp_path, "state.json")
         with open(path, "w") as f:
             f.write("{ this is not json")
-        assert StateStore(path).level("dns") == "off"
+        from broker.registry_txn import RegistryError
+        with pytest.raises(RegistryError, match="cannot be read safely"):
+            StateStore(path)
+        assert open(path).read() == "{ this is not json"
 
     def test_state_file_is_world_readable(self, store, registry):
         """The unprivileged status path reads this, so opening a page never

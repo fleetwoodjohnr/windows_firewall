@@ -18,6 +18,7 @@ param(
     [string]$Provider
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $PROVIDERS = @{
     'quad9'      = @{ v4 = @('9.9.9.9','149.112.112.112')
@@ -60,9 +61,9 @@ try {
         }
     }
 
-    Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses $p.v4
-    try { Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses $p.v6 -ErrorAction Stop }
-    catch { }   # IPv6 disabled on this interface is fine, not a failure
+    Set-DnsClientServerAddress -InterfaceIndex $index -ServerAddresses @($p.v4 + $p.v6)
+    $actual = @((Get-DnsClientServerAddress -InterfaceIndex $index).ServerAddresses)
+    foreach ($address in $p.v4) { if ($address -notin $actual) { throw 'Windows did not apply the requested DNS servers.' } }
 
     Clear-DnsClientCache
     @{ interfaceIndex = $index; provider = $Provider; pinned = $true;

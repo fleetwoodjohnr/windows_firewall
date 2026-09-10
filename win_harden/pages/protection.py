@@ -198,15 +198,15 @@ class ProtectionPage(LevelFamilyPage):
             self.status_rows["bitlocker"].set_value("Not available", "warn")
         else:
             protected = [v for v in volumes if v.get("protectionOn")]
-            unsaved = [v for v in protected if not v.get("recoveryKeySaved")]
+            unsaved = [v for v in protected if not v.get("recoveryProtectorPresent")]
             if not protected:
                 self.status_rows["bitlocker"].set_value("Off on every drive", "bad")
             elif unsaved:
                 self.status_rows["bitlocker"].set_value(
-                    f"On, but {len(unsaved)} drive(s) have no saved recovery key", "bad")
+                    f"On, but {len(unsaved)} drive(s) have no recovery password protector", "bad")
             else:
                 self.status_rows["bitlocker"].set_value(
-                    f"On, recovery key saved ({len(protected)} drive(s))", "ok")
+                    f"On, recovery protector present; backup not verified ({len(protected)} drive(s))", "ok")
 
         applied = defender.get("asrRules") or {}
         for guid, row in self.rule_rows.items():

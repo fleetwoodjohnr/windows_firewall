@@ -8,6 +8,7 @@ param(
     [Parameter(Mandatory)][ValidateSet('on','off')][string]$State
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 try {
     $enabled = if ($State -eq 'on') { 'True' } else { 'False' }
     if ($Profile -eq 'All') { Set-NetFirewallProfile -All -Enabled $enabled }

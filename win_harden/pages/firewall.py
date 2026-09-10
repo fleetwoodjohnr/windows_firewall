@@ -37,7 +37,7 @@ class FirewallPage(Page):
     TITLE = "Firewall Rules"
     SUBTITLE = (
         "Which groups of inbound rules are open, for each of Windows' three firewall profiles. "
-        "Only one profile is in force at a time — whichever matches the network you are on."
+        "Each connected network uses its own profile. Some rules apply to several profiles."
     )
 
     def __init__(self, window, parent=None):
@@ -54,6 +54,7 @@ class FirewallPage(Page):
         self._build_groups()
         self.add_stretch()
         self._rows = {}
+        self._affected = {}
 
     def _build_picker(self):
         group = Group("Profile", "", self)
@@ -123,6 +124,7 @@ class FirewallPage(Page):
             name = entry.get("name")
             if not name:
                 continue
+            self._affected[name] = entry.get('affectedProfiles', [self.current_profile()])
             info = describe(name)
             state = entry.get("state")
             if state == "partial":
@@ -147,6 +149,12 @@ class FirewallPage(Page):
     # -- changes --------------------------------------------------------------
 
     def _on_toggle(self, name, enabled, done):
+        affected = self._affected.get(name, [self.current_profile()])
+        if len(affected) > 1:
+            confirm(self.window, 'Change shared firewall rules?',
+                    f"{name} includes rules shared by {', '.join(affected)}. This change affects those profiles too.",
+                    'Change shared rules', lambda: self._send_toggle(name, enabled, done), lambda: done(False))
+            return
         if not enabled and is_essential(name):
             # Turning this off does not harden the machine; it breaks its
             # ability to use a network at all, and then looks like a bug in this

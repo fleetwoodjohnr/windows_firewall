@@ -26,6 +26,7 @@ def load_families():
     that one family being unavailable rather than to a broker that will not
     start at all.
     """
+    from . import system_state  # register restorers for fresh uninstall processes
     families = {}
     for name in ("defender", "exploit", "exposure", "credential", "dns", "tls"):
         try:

@@ -81,10 +81,38 @@ def set_provider(provider_id, interface_index, ctx):
     """
     if ctx.runner is None:
         raise RuntimeError("no PowerShell runner is available")
-    return ctx.runner("set-dns-provider.ps1", {
+    from ..registry_txn import Transaction
+    from ..dns_providers import BY_ID
+    snapshot = ctx.runner('status-system.ps1', {'Resource': 'dns'}).get('value')
+    if not isinstance(snapshot, dict):
+        raise RuntimeError('Original DNS settings could not be read; nothing was changed.')
+    adapters = snapshot.get('adapters') or []
+    target = next((a for a in adapters if a.get('index') == interface_index), None)
+    if target is None:
+        raise RuntimeError('The selected network adapter is no longer present.')
+    txn = Transaction(ctx.store, 'dns-provider-' + target['guid'], registry=ctx.registry,
+                      context={'runner': ctx.runner, 'registry': ctx.registry})
+    if provider_id == 'automatic':
+        if not txn._section['claims']:
+            return ctx.runner('set-dns-provider.ps1', {'InterfaceIndex': str(interface_index), 'Provider': provider_id})
+        failures = txn.revert()
+        if failures:
+            raise RuntimeError('Some original DNS settings could not be restored; see the broker log.')
+        return {'provider': 'automatic', 'restoredOriginal': True}
+    txn.begin('on')
+    txn.record('system', 'dns:adapter:' + target['guid'], {'resource': 'dns',
+               'value': {'adapters': [target], 'doh': [], 'removeDoh': []}})
+    provider = BY_ID[provider_id]
+    for address in (*provider.ipv4, *provider.ipv6):
+        existing = next((d for d in snapshot.get('doh', []) if d['address'] == address), None)
+        txn.record('system', 'dns:doh:' + address, {'resource': 'dns', 'value': {
+            'adapters': [], 'doh': [existing] if existing else [], 'removeDoh': [] if existing else [address]}})
+    result = ctx.runner("set-dns-provider.ps1", {
         "InterfaceIndex": str(int(interface_index)),
         "Provider": provider_id,
     })
+    txn.commit('on')
+    return result
 
 
 def status(ctx):

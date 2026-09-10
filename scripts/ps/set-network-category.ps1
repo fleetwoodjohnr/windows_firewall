@@ -13,6 +13,7 @@ param(
     [Parameter(Mandatory)][ValidateSet('Public','Private')][string]$Category
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 try {
     Set-NetConnectionProfile -InterfaceIndex ([int]$InterfaceIndex) -NetworkCategory $Category
 }

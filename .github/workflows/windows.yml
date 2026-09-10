@@ -1,0 +1,36 @@
+name: Windows package
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  package:
+    # Server 2025 can build x64 artifacts; acceptance still needs Windows 11.
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\verify-windows.ps1 -SyntaxOnly -Report "$env:RUNNER_TEMP\powershell-syntax.json"
+      - name: Verify dependencies, test and build installer
+        shell: powershell
+        run: .\scripts\bootstrap.ps1
+      - name: Upload installer and dependency inventory
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-harden-windows-x64
+          path: |
+            installer/Output/WinHardenSetup-1.1.0.exe
+            installer/Output/WinHardenSetup-1.1.0.exe.sha256
+            dist/win-harden/dependencies.json
+      - name: Upload syntax report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: powershell-syntax
+          path: ${{ runner.temp }}/powershell-syntax.json

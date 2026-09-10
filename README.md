@@ -1,127 +1,68 @@
 # Windows Firewall & Hardening
 
-A desktop app for seeing and changing what protects a Windows 11 PC: what the
-firewall lets in, whether Microsoft Defender's behavioural rules are actually
-enforcing, how hard it is to steal the credentials in memory, whether DNS
-lookups leave in plain text, and how weak a connection the machine will accept.
+A Windows counterpart of [firewall-gui for Fedora](https://github.com/fleetwoodjohnr/fedora_firewall_gui), using Windows Firewall and Microsoft Defender. Targets **Windows 11, Intel/AMD x64**. ARM64 is not supported by this installer.
 
-Ported from [a GTK4 app for Fedora](https://github.com/fleetwoodjohnr/fedora_firewall_gui)
-that did the same job for `firewalld`. None of that plumbing survives — every
-backend here is Windows — but the design does, and the design is the point.
+The six pages are Dashboard, Firewall Rules, Networks, Protection, Hardening, and **Virus Scan**. The GUI runs without administrator rights. Security changes use a separate helper through UAC; long antivirus operations run in a Windows service.
 
-## What makes it different from a hardening script
+## Build and install
 
-**Every level tells you what it will break, before you apply it.** Choosing
-"Strict" from a dropdown teaches you nothing. Each of the six level selectors
-shows what a level turns on and what it costs, and asks for confirmation with
-that text in front of you. Where the honest answer is "expect real breakage in
-places you don't control", that is what it says.
-
-**Every change is undoable, exactly.** Before writing anything, the original is
-recorded. Reverting restores it — and where a value did not previously exist,
-reverting *deletes* it rather than writing a guessed default, because absent and
-default-valued are different states. Uninstalling reverts everything first, so
-the app never leaves settings behind that outlive the thing that explained them.
-
-**Controls show the system, never your request.** A switch moves only after the
-change actually lands. That matters more on Windows than on Linux: Tamper
-Protection, group policy and licence tiers can all accept a change and discard
-it, and a control that moved on click would report protection the machine does
-not have.
-
-**It refuses things that would lock you out.** It will not disable Remote
-Desktop from inside a Remote Desktop session. It will not apply a level
-requiring BitLocker until the recovery key is saved somewhere. It will not
-pretend a Defender level applied while Tamper Protection was silently discarding
-it. Each refusal explains what to do instead.
-
-## Install
-
-Download `WinHardenSetup.exe` from a release and run it. It is self-contained —
-Python and Qt are bundled, and nothing is fetched at install time.
-
-To build it yourself on a Windows 11 machine:
+On Windows 11 x64, open **64-bit Windows PowerShell as Administrator** in this checkout:
 
 ```powershell
-git clone <this repo>
-cd windows-firewall
-.\scripts\bootstrap.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap.ps1
 ```
 
-That installs Python and Inno Setup via `winget`, installs the Python
-dependencies, runs the test suite, and builds `installer\Output\WinHardenSetup-1.0.0.exe`.
-Everything the build needs is downloaded there, once, so the installer it
-produces needs nothing.
+The bootstrap automatically downloads the pinned Python runtime, Qt, pywin32, PyInstaller, test dependencies, and Inno Setup. Downloads use HTTPS and SHA-256 checks; vendor executables also require the expected Authenticode publisher. Microsoft Defender scans downloaded installers and dependency wheels before they are installed. Verification failure stops the build. Defender must be active with archive scanning enabled; restricted corporate policies may require administrator assistance. The script does not disable antivirus protection or create antivirus exclusions.
 
-## Pages
+The build runs tests and checks the three frozen executables outside the source directory, then produces:
 
-- **Dashboard** — what is protecting this PC right now, panic mode, and specific
-  findings each with the one action that fixes it. If something could not be
-  read, it says so rather than showing a clean result it never verified.
-- **Firewall Rules** — the inbound rule groups open on each of Windows' three
-  profiles, with a plain-English risk note. A partly-enabled group is shown as
-  partly enabled, not rounded to on or off.
-- **Networks** — public or private per connected adapter, and which resolver
-  answers its lookups.
-- **Protection** — Defender and ASR, exploit protection and ransomware, plus all
-  18 desktop ASR rules individually.
-- **Hardening** — network exposure, credential protection, DNS privacy, TLS.
-
-## The six levels
-
-Each is Off / Basic / Balanced / Strict. Basic is meant to be free — if a level
-called Basic breaks something you use, that is a bug in this app.
-
-| | Basic | Balanced | Strict |
-|---|---|---|---|
-| **Defender & ASR** | cloud protection, PUA blocking, 8 document/email rules | + credential, ransomware, driver and USB rules | + enforces the rules that block unfamiliar software |
-| **Exploit & ransomware** | DEP, ASLR, SEHOP, CFG | + Controlled Folder Access | + mandatory ASLR, BitLocker required |
-| **Network exposure** | SMBv1 removed, AutoRun off | + LLMNR/NetBIOS/mDNS/WPAD off, RDP off | + default-deny inbound |
-| **Credential protection** | UAC tightened, WDigest off | + LSA Protection | + Credential Guard |
-| **DNS privacy** | DoH where available | + local name protocols off | + DoH mandatory, no fallback |
-| **TLS & crypto** | SSL 2/3 and RC4 off | + TLS 1.0/1.1 and 3DES off | + AEAD only, weak hashes off |
-
-## How privilege works
-
-Windows has no polkit — no way to authorise one action and go back to being
-unprivileged. So the GUI runs unelevated and never elevates. The first
-privileged change starts a small broker through UAC, which stays alive for the
-session and listens on a named pipe.
-
-```
-win-harden.exe (asInvoker)
-      |  ShellExecuteEx "runas"  ->  one UAC prompt per session
-      v
-win-harden-broker.exe (requireAdministrator)
-      ^
-      |  \\.\pipe\win-harden-<SID>   DACL: that SID, SYSTEM, Administrators
-      |  accepts: a verb, and values from fixed lists. Nothing else.
+```text
+installer\Output\WinHardenSetup-1.1.0.exe
+installer\Output\WinHardenSetup-1.1.0.exe.sha256
 ```
 
-Reads never go near it, so opening a page never prompts.
+Run that installer on the target PC. **Python, Qt and pywin32 are bundled:** the installed application does not need a separate Python installation, pip, winget, or a developer environment. Windows 11 supplies PowerShell, Windows Firewall and Defender. The installer installs the scan service and a sign-in shortcut for the tray monitor. Optional Sysmon and definition updates require internet access; Sysmon downloads are hash-checked, signature-checked and scanned. The optional baseline item opens Microsoft's download page for manual review.
 
-The broker accepts a verb and values matched against fixed lists — no paths, no
-addresses, no free text. Its own tables decide what a level means; it takes a
-level *id* from the GUI and looks the meaning up itself. Everything it runs is
-`powershell.exe -NoProfile -File <one of 15 shipped scripts>` with parameters
-bound as data. Never `-Command`: an argv list is not enough when one element can
-be a script. Each script re-validates its own parameters with `[ValidateSet]`,
-so the check happens twice, in two languages, in two processes — and a test
-asserts the two agree.
+Pinned build inputs are in `requirements-win.lock` and `scripts/downloads.json`. Upstream changes, including changes to the vendor's unversioned Sysmon archive, fail verification until the manifest is reviewed and updated. Build staging is under `%ProgramData%\win-harden-build`. This repository does not include a prebuilt or code-signed installer; a locally built installer can show an unknown-publisher prompt.
 
-## Development
+## Virus scans and downloads
+
+**Virus Scan** provides quick, full, file and folder scans, definition updates, Defender status, recent results, and removal of active threats. Defender performs its configured quarantine/removal actions. **Remove active threats** requires UAC and applies to all active threats on the PC. Use Windows Security to review quarantine, remaining actions and restart requests; the app never restores quarantined malware automatically.
+
+The tray monitor starts at sign-in and watches the current user's Windows Downloads known folder. Add other local download destinations on the Virus Scan page. Closing the window leaves the monitor running; **Exit monitor** stops the additional scans. Defender continues independently. Downloads completed while the monitor was stopped are reconciled when it starts again.
+
+Temporary browser download files are deferred until renamed and stable. Changed files receive a new scan. Jobs and retries survive restarts, and interrupted work is reported as incomplete. Watched folders are scanned recursively; linked folders, network/device paths, alternate data streams and paths over 240 characters are refused or reported. Folder scans submit only files readable by the requesting user.
+
+**This is not a guarantee that every download is safe.** Microsoft Defender real-time and downloaded-file protection provide system-wide protection. The monitor adds scans in watched folders; it does not intercept every browser or prevent a pending file from being opened. Downloads saved elsewhere need a watched folder or a manual scan. Defender exclusions, encrypted archives, unsupported content, stale definitions, offline cloud checks and an unavailable engine can limit coverage. A verified result says **No threats detected**, and belongs to the content scanned at that time. Unverified completion or changed content never receives that result.
+
+## Firewall and hardening
+
+Firewall profiles can be active simultaneously. Rule groups shared across profiles show their affected profiles before changes. Panic mode adds application-owned inbound/outbound block rules and records the prior profile settings; turning it off restores those settings. Apply panic mode only at the physical machine.
+
+Protection and Hardening contain six families, each with Off / Basic / Balanced / Strict choices: Defender/ASR, exploit protection, network exposure, credential protection, DNS privacy, and TLS/crypto. Read each level's compatibility notes before applying it. BitLocker is reported, not enabled by the app. A recovery protector being present does **not** prove the recovery key has been backed up.
+
+Level changes, panic mode, selected DNS providers, and the Enable download protection action record originals before mutation in `%ProgramData%\win-harden\state.json`. Downgrading a level restores settings it no longer uses. Revert restores original values, including absence, and respects settings shared by multiple families. Individual firewall rules, network category choices, ASR overrides and direct component switches are explicit settings and can persist independently of levels. Antivirus remediation and optional software installation are not undone by reverting a hardening level.
+
+Uninstall first stops the scanner and restores journalled settings. If restoration fails, it retains the application and journal for retry. Do not delete that journal to bypass a failure. Legacy records that did not preserve an original unset state require manual reconciliation; the app refuses to invent an original value. Policy, Tamper Protection and reboot requirements are reported rather than bypassed.
+
+## Verification
+
+Run the installed verification script from **Administrator Windows PowerShell**:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\win-harden\scripts\verify-windows.ps1" -RunScan
+```
+
+It writes `win-harden-verification.json` to your Desktop. See [the Windows verification checklist](docs/WINDOWS-VERIFICATION.md) for installation, sign-in monitoring, safe EICAR testing, UAC, reboot and uninstall tests. Windows API, Defender and installer behavior require those checks on actual Windows 11; Linux tests and Windows Server CI do not establish Windows 11 acceptance.
+
+For portable development tests:
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install PySide6 pytest
-.venv/bin/python -m pytest tests -q
+python3 -m venv .venv
+.venv/bin/python -m pip install PySide6 pytest
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests -q
 ```
 
-The suite runs on Linux and macOS as well as Windows. Everything except the
-Windows API calls themselves is covered: the trust boundary, the revert
-mechanism, all six families round-tripping against a fake registry, the
-cross-language script validation, and the UI — including the guarantee that a
-refused change never moves its control.
+Tests exercise protocol validation, original-state restoration, scan result classification, queue ownership/recovery, download lifecycle, package wiring and Qt pages. The Windows workflow also parses scripts with Windows PowerShell 5.1, builds the frozen package and uploads the installer artifacts. It must be run before distributing a build.
 
-What cannot be tested off Windows, and must be checked on the real machine:
-the UAC prompt and pipe handshake, whether each PowerShell script does what it
-claims, and that a reboot after Credential Guard or LSA Protection still boots.
+Microsoft references: [Defender command-line behavior](https://learn.microsoft.com/en-us/defender-endpoint/command-line-arguments-microsoft-defender-antivirus), [scan events](https://learn.microsoft.com/en-us/defender-endpoint/troubleshoot-microsoft-defender-antivirus), [exclusions](https://learn.microsoft.com/en-us/defender-endpoint/microsoft-defender-antivirus-exclusions-configure), [downloaded-file protection](https://learn.microsoft.com/en-us/powershell/module/defender/set-mppreference).

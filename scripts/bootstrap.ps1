@@ -1,101 +1,55 @@
-<#
-.SYNOPSIS
-  One command to go from a clean Windows 11 machine to a built installer.
-
-  This is where "download any and all important dependencies" happens. Everything
-  the build needs is fetched here, once, on the machine doing the building --
-  so that the installer it produces needs nothing at all at install time.
-
-  That split is deliberate. An installer that downloads dependencies has a dozen
-  ways to fail on someone else's machine: no internet, a proxy, a pinned TLS
-  version, a package that moved. The end user gets a single self-contained exe
-  instead, and all of that risk is absorbed here.
-
-.EXAMPLE
-  .\scripts\bootstrap.ps1
-  .\scripts\bootstrap.ps1 -SkipInstaller     # build the exes, skip Inno Setup
-#>
+<# One command on Windows 11 x64: download, verify, scan, install build dependencies, test, package. #>
 [CmdletBinding()]
-param(
-    [switch]$SkipInstaller,
-    [switch]$SkipTests
-)
+param([switch]$SkipInstaller, [switch]$SkipTests)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-
-function Write-Step { param([string]$Message) Write-Host "`n==> $Message" -ForegroundColor Cyan }
-function Test-Command { param([string]$Name) [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
-
-Write-Step "Checking Windows version"
-$build = [int](Get-CimInstance Win32_OperatingSystem).BuildNumber
-if ($build -lt 22000) {
-    Write-Warning "This looks like Windows 10 (build $build). The app targets Windows 11; some settings (native DoH in particular) will not be available."
+$script:SecurityRoot = $repo
+. (Join-Path $PSScriptRoot 'secure-download.ps1')
+if (-not [Environment]::Is64BitProcess -or [Environment]::OSVersion.Version.Build -lt 22000 -or
+    $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Run 64-bit Windows PowerShell on Windows 11 Intel/AMD x64.' }
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Open Windows PowerShell as Administrator, then run scripts\bootstrap.ps1. Defender scanning and dependency installation require elevation.'
 }
+Assert-DefenderReady
+try { Update-MpSignature -ErrorAction Stop } catch { Write-Warning "Definition update failed; using installed definitions: $_" }
+$manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'downloads.json') -Raw | ConvertFrom-Json
+$work = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'win-harden-build'
+Initialize-PrivateDirectory -Path $work
 
-Write-Step "Checking for winget"
-if (-not (Test-Command 'winget')) {
-    Write-Error @"
-winget is not available, so dependencies cannot be installed automatically.
-
-Install 'App Installer' from the Microsoft Store, then run this again. Or install
-these by hand and re-run:
-  - Python 3.11 or newer   https://www.python.org/downloads/
-  - Inno Setup 6           https://jrsoftware.org/isdl.php
-"@
-    exit 1
+$pythonHome = Join-Path $work 'Python313'
+$basePython = Join-Path $pythonHome 'python.exe'
+if (-not (Test-Path -LiteralPath $basePython)) {
+    $installer = Get-VerifiedDownload -Package $manifest.python -Destination (Join-Path $work 'python-setup.exe')
+    $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=1',"TargetDir=`"$pythonHome`"",'Include_launcher=0','Include_test=0','PrependPath=0','Include_pip=1') -Wait -PassThru
+    if ($process.ExitCode -notin @(0,3010)) { throw "Python setup failed: $($process.ExitCode)" }
 }
-
-Write-Step "Installing Python"
-if (-not (Test-Command 'py')) {
-    winget install --id Python.Python.3.13 --exact --silent --accept-package-agreements --accept-source-agreements
-    # winget updates PATH for new processes, not this one.
-    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
-                [Environment]::GetEnvironmentVariable('Path','User')
-}
-if (-not (Test-Command 'py')) { Write-Error "Python still isn't on PATH. Open a new terminal and run this again."; exit 1 }
-py -3 --version
-
-if (-not $SkipInstaller) {
-    Write-Step "Installing Inno Setup"
-    $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe','C:\Program Files\Inno Setup 6\ISCC.exe' -ErrorAction SilentlyContinue
-    if (-not $iscc) {
-        winget install --id JRSoftware.InnoSetup --exact --silent --accept-package-agreements --accept-source-agreements
-    }
-}
-
-Write-Step "Creating the build virtual environment"
+Invoke-CheckedNative $basePython @('-c', "import sys,struct; assert sys.version_info[:3] == (3,13,15) and struct.calcsize('P') == 8, 'Unexpected Python version; remove the old win-harden-build/Python313 directory before rebuilding'")
 $venv = Join-Path $repo '.venv-build'
-if (-not (Test-Path $venv)) { py -3 -m venv $venv }
+if (-not (Test-Path -LiteralPath (Join-Path $venv 'Scripts\python.exe'))) { Invoke-CheckedNative $basePython @('-m','venv',$venv) }
 $python = Join-Path $venv 'Scripts\python.exe'
+Invoke-CheckedNative $python @('-c', "import sys; assert sys.version_info[:3] == (3,13,15), 'Remove .venv-build and rerun bootstrap with the pinned Python'")
+$wheels = Join-Path $work 'wheels'
+New-Item -ItemType Directory -Path $wheels -Force | Out-Null
+$lock = Join-Path $repo 'requirements-win.lock'
+Invoke-CheckedNative $python @('-m','pip','download','--index-url','https://pypi.org/simple','--require-hashes','--only-binary=:all:','--dest',$wheels,'-r',$lock)
+foreach ($wheel in Get-ChildItem -LiteralPath $wheels -Filter '*.whl') { Assert-ScannedFile -Path $wheel.FullName }
+Invoke-CheckedNative $python @('-m','pip','install','--no-index','--find-links',$wheels,'--require-hashes','-r',$lock)
+Invoke-CheckedNative $python @('-m','pip','check')
+# pywin32 postinstall is intentionally not used in a virtual environment.
 
-Write-Step "Installing Python dependencies"
-& $python -m pip install --upgrade pip --quiet
-& $python -m pip install --quiet `
-    PySide6 `
-    pywin32 `
-    pyinstaller `
-    pytest
-Write-Host "  PySide6      the GUI toolkit"
-Write-Host "  pywin32      named pipes, security descriptors, ShellExecute"
-Write-Host "  pyinstaller  bundles CPython and Qt into the exe"
-Write-Host "  pytest       runs the test suite below"
-
-# pywin32 installs COM/service DLLs that need registering before use.
-& $python -c "import pywin32_bootstrap" 2>$null
-$postinstall = Join-Path $venv 'Scripts\pywin32_postinstall.py'
-if (Test-Path $postinstall) { & $python $postinstall -install -silent | Out-Null }
-
-if (-not $SkipTests) {
-    Write-Step "Running the test suite"
-    Push-Location $repo
-    try {
-        & $python -m pytest tests -q
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "Tests failed. Not building an installer from a failing tree."
-            exit 1
-        }
-    } finally { Pop-Location }
+$iscc = Join-Path $work 'InnoSetup\ISCC.exe'
+if (-not $SkipInstaller -and -not (Test-Path -LiteralPath $iscc)) {
+    $installer = Get-VerifiedDownload -Package $manifest.inno -Destination (Join-Path $work 'inno-setup.exe')
+    $target = Split-Path -Parent $iscc
+    $process = Start-Process $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',"/DIR=`"$target`"") -Wait -PassThru
+    if ($process.ExitCode -ne 0) { throw "Inno Setup failed: $($process.ExitCode)" }
 }
-
-Write-Step "Building"
-& (Join-Path $PSScriptRoot 'build.ps1') -Python $python -SkipInstaller:$SkipInstaller
+Push-Location $repo
+try {
+    if (-not $SkipTests) {
+        & $python -m pytest tests -q
+        if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Not building an installer from a failing tree.' }
+    }
+    & (Join-Path $PSScriptRoot 'build.ps1') -Python $python -Iscc $iscc -SkipInstaller:$SkipInstaller
+} finally { Pop-Location }

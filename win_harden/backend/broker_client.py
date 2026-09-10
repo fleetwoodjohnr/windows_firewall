@@ -32,6 +32,7 @@ import queue
 import sys
 import threading
 import uuid
+import time
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -64,6 +65,7 @@ CONNECT_TIMEOUT_SECONDS = 60
 CONNECT_POLL_SECONDS = 0.25
 
 BROKER_EXE = "win-harden-broker.exe"
+_RETIRED_WORKERS = []
 
 # ShellExecute returns a value <= 32 to mean failure. 1223 is
 # ERROR_CANCELLED -- the user dismissed the UAC prompt, which is an ordinary
@@ -94,6 +96,7 @@ def current_user_sid():  # pragma: no cover - Windows-only
         win32api.GetCurrentProcess(), win32security.TOKEN_QUERY
     )
     sid, _attributes = win32security.GetTokenInformation(token, win32security.TokenUser)
+    token.Close()
     return win32security.ConvertSidToStringSid(sid)
 
 
@@ -156,13 +159,20 @@ class _Worker(QObject):  # pragma: no cover - needs Qt + Windows
         import pywintypes  # noqa: PLC0415
 
         name = PIPE_PREFIX + validate_sid(sid)
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and not self._stop.is_set():
             try:
-                return win32file.CreateFile(
+                handle = win32file.CreateFile(
                     name,
                     win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                    0, None, win32file.OPEN_EXISTING, 0, None,
+                    0, None, win32file.OPEN_EXISTING, 0x40120000, None,
                 )
+                from broker.pipe import verify_server_image
+                try:
+                    verify_server_image(handle, broker_path())
+                except Exception:
+                    handle.Close()
+                    raise
+                return handle
             except pywintypes.error:
                 time.sleep(CONNECT_POLL_SECONDS)
         raise BrokerUnavailable(
@@ -176,16 +186,16 @@ class _Worker(QObject):  # pragma: no cover - needs Qt + Windows
         if self._handle is not None:
             return
         sid = current_user_sid()
-        deadline = time.monotonic() + CONNECT_TIMEOUT_SECONDS
         # Try an existing broker first: a session that already elevated must not
         # prompt a second time.
         try:
             self._handle = self._connect(sid, time.monotonic() + 0.5)
+            self._handshake()
             return
         except BrokerUnavailable:
-            pass
+            self.disconnect()
         self._launch_broker(sid)
-        self._handle = self._connect(sid, deadline)
+        self._handle = self._connect(sid, time.monotonic() + CONNECT_TIMEOUT_SECONDS)
         self._handshake()
 
     def _handshake(self):
@@ -203,29 +213,26 @@ class _Worker(QObject):  # pragma: no cover - needs Qt + Windows
     # -- framing --------------------------------------------------------------
 
     def _exchange(self, frame):
-        import win32file  # noqa: PLC0415
-        import pywintypes  # noqa: PLC0415
-
-        win32file.WriteFile(self._handle, frame)
-        while b"\n" not in self._buffer:
-            try:
-                _code, chunk = win32file.ReadFile(self._handle, 64 * 1024)
-            except pywintypes.error as e:
-                raise BrokerUnavailable(f"the privileged helper closed the connection: {e}") from e
-            if not chunk:
-                raise BrokerUnavailable("the privileged helper closed the connection")
-            self._buffer += chunk
-        line, _sep, self._buffer = self._buffer.partition(b"\n")
+        from scanner.ipc import read_frame, write_frame
+        from broker.protocol import MAX_FRAME_BYTES, decode_frame
+        handle = self._handle
+        try:
+            write_frame(handle, frame)
+            line = read_frame(handle, timeout=CALL_TIMEOUT_SECONDS, limit=MAX_FRAME_BYTES)
+        except Exception as exc:
+            raise BrokerUnavailable(f'The privileged helper connection failed: {exc}') from exc
 
         _rid, ok, result, kind, message = decode_response(line)
+        if _rid != decode_frame(frame)['id']:
+            raise BrokerUnavailable('The helper response did not match this request.')
         if not ok:
             raise error_for_kind(kind, message)
         return result
 
     # -- request loop ---------------------------------------------------------
 
-    def submit(self, request_id, frame, callback):
-        self._queue.put((request_id, frame, callback))
+    def submit(self, request_id, frame, cancelled):
+        self._queue.put((request_id, frame, cancelled))
 
     def run_loop(self):
         while not self._stop.is_set():
@@ -233,22 +240,41 @@ class _Worker(QObject):  # pragma: no cover - needs Qt + Windows
                 item = self._queue.get(timeout=0.2)
             except queue.Empty:
                 continue
-            request_id, frame, _callback = item
+            request_id, frame, cancelled = item
+            if cancelled.is_set():
+                continue
             try:
                 self.ensure_connected()
+                if cancelled.is_set() or self._stop.is_set():
+                    continue
                 result = self._exchange(frame)
             except (BrokerError, ProtocolError) as e:
+                self.disconnect()
                 self.completed.emit(request_id, None, e)
             except Exception as e:  # noqa: BLE001 - never let the worker thread die
+                self.disconnect()
                 self.completed.emit(request_id, None, BrokerError(str(e)))
             else:
                 self.completed.emit(request_id, result, None)
 
     def stop(self):
         self._stop.set()
+        self.disconnect()
+
+    def disconnect(self):
+        handle, self._handle = self._handle, None
+        self._buffer = b''
+        if handle is not None:
+            try:
+                import win32file
+                win32file.CancelIoEx(handle, None)
+                win32file.CloseHandle(handle)
+            except Exception:
+                pass
 
 
 class BrokerClient(QObject):
+    status_completed = Signal(object, object, object)
     """Public API. Every method is `(..., callback)` where
 
         callback(result: dict | None, error: WinHardenError | None)
@@ -259,6 +285,8 @@ class BrokerClient(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._calls = {}
+        self._closed = False
+        self.status_completed.connect(lambda callback, result, error: callback(result, error))
         self._thread = QThread()
         self._worker = _Worker()
         self._worker.moveToThread(self._thread)
@@ -281,6 +309,7 @@ class BrokerClient(QObject):
             return
 
         call = _Call(request_id, callback)
+        call.cancelled = threading.Event()
         self._calls[request_id] = call
 
         timer = QTimer(self)
@@ -289,7 +318,7 @@ class BrokerClient(QObject):
         timer.start(CALL_TIMEOUT_SECONDS * 1000)
         call.timer = timer
 
-        self._worker.submit(request_id, frame, callback)
+        self._worker.submit(request_id, frame, call.cancelled)
 
     def _finish(self, request_id, result, error):
         call = self._calls.pop(request_id, None)
@@ -299,26 +328,54 @@ class BrokerClient(QObject):
         timer = getattr(call, "timer", None)
         if timer is not None:
             timer.stop()
+            timer.deleteLater()
         call.callback(result, error)
 
     def _on_completed(self, request_id, result, error):
         self._finish(request_id, result, error)
 
     def _on_timeout(self, request_id):
+        call = self._calls.get(request_id)
+        if call:
+            call.cancelled.set()
         self._finish(request_id, None, BrokerTimeout(
             f"the privileged helper didn't respond within {CALL_TIMEOUT_SECONDS} seconds. "
-            f"If an Administrator prompt appeared, it may have been dismissed or missed."
+            "An already-started change may still be running. Refresh system status before retrying."
         ))
 
     def shutdown(self):
+        if self._closed:
+            return
+        self._closed = True
+        for rid, call in list(self._calls.items()):
+            call.cancelled.set()
+            self._finish(rid, None, BrokerUnavailable('The application is closing.'))
         self._worker.stop()
         self._thread.quit()
-        self._thread.wait(2000)
+        if not self._thread.wait(2000):
+            # ShellExecute can still be waiting for UAC. Keep Qt's thread
+            # object alive until it returns; destroying it would abort the app.
+            _RETIRED_WORKERS.append((self._thread, self._worker))
 
     # -- verbs ----------------------------------------------------------------
 
     def status(self, callback):
-        self._send("status", callback)
+        def work():
+            result, error = None, None
+            try:
+                from .status import read_status
+                result = read_status()
+            except Exception as exc:
+                error = BrokerUnavailable(str(exc))
+            if not self._closed:
+                try:
+                    self.status_completed.emit(callback, result, error)
+                except RuntimeError:
+                    pass
+        threading.Thread(target=work, name='system-status', daemon=True).start()
+
+    def antivirus_action(self, action, callback):
+        self._send('antivirus-action', callback, antivirus_action=action)
 
     def apply_level(self, family, level, callback):
         self._send("apply", callback, family=family, level=level)

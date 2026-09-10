@@ -303,7 +303,7 @@ class TestDashboard:
             "live": {
                 "defender": {"realtimeProtection": True, "signatureAgeDays": 0,
                              "asrRules": {"x": "block"}},
-                "exploit": {"bitlocker": [{"protectionOn": True, "recoveryKeySaved": True}]},
+                "exploit": {"bitlocker": [{"protectionOn": True, "recoveryProtectorPresent": True}]},
                 "exposure": {"features": [], "rdpDenied": 1, "llmnrDisabled": 0},
                 "credential": {"lsaProtection": 1, "wdigestPlaintext": 0},
                 "dns": {"interfaces": [{"index": 1, "dohEnabled": True}]},

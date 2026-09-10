@@ -79,7 +79,7 @@ def _bitlocker_off(status):
 
 def _bitlocker_without_key(status):
     volumes = _live(status, "exploit").get("bitlocker") or []
-    return any(v.get("protectionOn") and not v.get("recoveryKeySaved") for v in volumes)
+    return any(v.get("protectionOn") and not v.get("recoveryProtectorPresent") for v in volumes)
 
 
 def _smb1_present(status):
@@ -135,14 +135,13 @@ FINDINGS = [
     Finding(
         id="bitlocker-no-key",
         needs="exploit",
-        title="BitLocker is on, but a drive has no saved recovery key",
+        title="BitLocker is on, but a drive has no recovery password protector",
         detail=(
             "The drive is encrypted and there is no recovery password protector on it. If the TPM "
             "is reset, the firmware is updated, or the machine fails to boot cleanly, Windows will "
-            "ask for a key that does not exist anywhere — and every file on that drive is gone "
-            "permanently.\n\n"
-            "Fix this before anything else on this page. In Windows: Manage BitLocker → Back up "
-            "your recovery key."
+            "require a recovery method. Other configured recovery methods may exist, but the app "
+            "has not verified them or any external backup.\n\n"
+            "Review recovery methods in Manage BitLocker and back up the recovery key."
         ),
         severity="high",
         applies_to=_bitlocker_without_key,
@@ -314,6 +313,15 @@ def applicable(status):
     could not actually verify would be worse than staying quiet about it.
     """
     matched = []
+    recorded = ((status.get('recorded') or {}).get('families') or {})
+    for name, record in recorded.items():
+        if record.get('incomplete'):
+            page = 'protection' if name in ('defender', 'exploit') else 'hardening'
+            matched.append(Finding(id='incomplete-' + name, needs=name, severity='high',
+                title=f'A previous {name} change is incomplete',
+                detail='The last operation did not finish. Some settings may have changed; the saved originals remain available. '
+                       'Revert the affected level or retry restoration before relying on the recorded choice.',
+                applies_to=lambda _: True, fix_page=page))
     for finding in FINDINGS:
         if not _was_read(status, finding.needs):
             continue

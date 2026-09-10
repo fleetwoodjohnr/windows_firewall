@@ -8,6 +8,7 @@
   the app's second page is a profile picker rather than a zone list.
 #>
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $out = [ordered]@{}
 
@@ -52,9 +53,8 @@ catch {
 # Panic mode, as this app defines it: every profile blocking inbound AND
 # outbound. Reported rather than inferred from a stored flag, so a change made
 # outside the app is visible.
-$out.panicMode = ($out.profiles.Count -gt 0) -and
-                 (@($out.profiles | Where-Object {
-                     $_.defaultInboundAction -eq 'Block' -and $_.defaultOutboundAction -eq 'Block'
-                 }).Count -eq $out.profiles.Count)
+$panicRules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name 'WinHarden-Panic-In-v1','WinHarden-Panic-Out-v1' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Block' })
+$out.panicMode = ($panicRules.Count -eq 2) -and (@($out.profiles | Where-Object { -not $_.enabled }).Count -eq 0)
 
 $out | ConvertTo-Json -Depth 5 -Compress

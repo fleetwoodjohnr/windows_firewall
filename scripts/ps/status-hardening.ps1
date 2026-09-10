@@ -9,6 +9,7 @@
   drive is gone permanently.
 #>
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $out = [ordered]@{}
 
@@ -17,12 +18,12 @@ try {
     $m = Get-ProcessMitigation -System -ErrorAction Stop
     # 'ON'/'OFF'/'NOTSET' come back as enum values; compare as strings so a
     # NOTSET is reported as not-enabled rather than crashing a bool cast.
-    $mitigations['dep']              = ([string]$m.Dep.Enable -eq 'ON')
-    $mitigations['aslr-bottomup']    = ([string]$m.Aslr.BottomUp -eq 'ON')
-    $mitigations['aslr-highentropy'] = ([string]$m.Aslr.HighEntropy -eq 'ON')
-    $mitigations['aslr-force']       = ([string]$m.Aslr.ForceRelocateImages -eq 'ON')
-    $mitigations['sehop']            = ([string]$m.SEHOP.Enable -eq 'ON')
-    $mitigations['cfg']              = ([string]$m.CFG.Enable -eq 'ON')
+    $mitigations['dep']              = ([string]$m.Dep.Enable)
+    $mitigations['aslr-bottomup']    = ([string]$m.Aslr.BottomUp)
+    $mitigations['aslr-highentropy'] = ([string]$m.Aslr.HighEntropy)
+    $mitigations['aslr-force']       = ([string]$m.Aslr.ForceRelocateImages)
+    $mitigations['sehop']            = ([string]$m.SEHOP.Enable)
+    $mitigations['cfg']              = ([string]$m.CFG.Enable)
 }
 catch {
     $out.mitigationsError = "Exploit protection could not be read: $($_.Exception.Message)"
@@ -42,7 +43,7 @@ try {
             # A recovery password protector existing is what makes the volume
             # recoverable. Whether the user also wrote it down is not something
             # Windows can tell us, and this app does not pretend otherwise.
-            recoveryKeySaved = $hasRecoveryPassword
+            recoveryProtectorPresent = $hasRecoveryPassword
         }
     }
 }
@@ -53,7 +54,9 @@ catch {
 $out.bitlocker = $volumes
 
 try {
-    $out.controlledFolderAccess = [string](Get-MpPreference).EnableControlledFolderAccess
+    $raw = (Get-MpPreference).EnableControlledFolderAccess
+    $names = @{0='Disabled';1='Enabled';2='AuditMode';3='BlockDiskModificationOnly';4='AuditDiskModificationOnly'}
+    $out.controlledFolderAccess = $names[[int]$raw]
 } catch { $out.controlledFolderAccess = $null }
 
 try {

@@ -15,9 +15,11 @@ param(
 
     [Parameter(Mandatory)]
     [ValidateSet('on','off')]
-    [string]$State
+    [string]$State,
+    [ValidateSet('yes','no')][string]$Reset = 'no'
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $name = switch ($Mitigation) {
     'dep'              { 'DEP' }
@@ -29,7 +31,9 @@ $name = switch ($Mitigation) {
 }
 
 try {
-    if ($State -eq 'on') {
+    if ($Reset -eq 'yes') {
+        Set-ProcessMitigation -System -Remove -Disable $name
+    } elseif ($State -eq 'on') {
         Set-ProcessMitigation -System -Enable $name
     } else {
         Set-ProcessMitigation -System -Disable $name

@@ -89,6 +89,9 @@ def apply(txn, level, ctx):
     extra = {}
 
     if level == "strict" and ctx.runner is not None:
+        from .system_state import capture
+        capture(txn, ctx, 'netbios')
+        capture(txn, ctx, 'firewall')
         # Enumerated rather than declared: the interface list and the profile
         # list are both discovered at runtime, so these cannot be a static
         # table of registry values.
@@ -105,11 +108,6 @@ def apply(txn, level, ctx):
 
 
 def revert(txn, ctx):
-    if ctx.runner is not None:
-        try:
-            ctx.runner("set-toggle.ps1", {"Toggle": "inbound-block", "State": "off"})
-        except Exception:  # noqa: BLE001 - the journal still restores the rest
-            pass
     return {}
 
 
@@ -122,6 +120,21 @@ def set_toggle(toggle, enabled, ctx):
     """
     if ctx.runner is None:
         raise RuntimeError("no PowerShell runner is available")
+    if toggle == 'panic-mode':
+        from ..registry_txn import Transaction
+        from .system_state import capture
+        txn = Transaction(ctx.store, 'panic', registry=ctx.registry, context={'runner': ctx.runner, 'registry': ctx.registry})
+        if enabled:
+            txn.begin('on')
+            capture(txn, ctx, 'firewall')
+            result = ctx.runner('set-panic.ps1', {'State': 'on'})
+            txn.commit('on')
+            return result
+        ctx.runner('set-panic.ps1', {'State': 'off'})
+        failures = txn.revert()
+        if failures:
+            raise RuntimeError('Panic rules removed, but original firewall settings could not all be restored.')
+        return {'panicMode': False}
     return ctx.runner("set-toggle.ps1", {"Toggle": toggle, "State": "on" if enabled else "off"})
 
 

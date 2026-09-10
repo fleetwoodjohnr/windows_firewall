@@ -4,6 +4,7 @@
   Unprivileged, changes nothing.
 #>
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $out = [ordered]@{}
 
@@ -21,12 +22,12 @@ try {
     } catch { }
 
     $interfaces = @()
-    foreach ($a in (Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
+    foreach ($a in (Get-NetAdapter -IncludeHidden -ErrorAction Stop |
                     Where-Object { $_.Status -ne 'Not Present' })) {
         $servers = @()
         try {
             $servers = @((Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex `
-                          -AddressFamily IPv4 -ErrorAction Stop).ServerAddresses)
+                          -ErrorAction Stop).ServerAddresses)
         } catch { }
 
         $category = $null
@@ -46,7 +47,7 @@ try {
             # registered for DoH. One plaintext resolver in the list means
             # lookups can still leave in clear.
             dohEnabled  = ($servers.Count -gt 0) -and
-                          (@($servers | Where-Object { $doh.ContainsKey($_) }).Count -eq $servers.Count)
+                          (@($servers | Where-Object { $doh.ContainsKey($_) -and $doh[$_].autoUpgrade -and -not $doh[$_].udpFallback }).Count -eq $servers.Count)
         }
     }
     $out.interfaces = $interfaces

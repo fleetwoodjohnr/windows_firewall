@@ -39,6 +39,7 @@ is the part that most needs testing -- is testable on any platform against
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 
 STATE_VERSION = 1
 
@@ -156,6 +157,7 @@ class WinRegBackend(RegistryBackend):
         return True, type_name, value
 
     def write_value(self, hive, path, name, value_type, value):
+        expected = (True, value_type, value)
         winreg = self._winreg
         if value_type not in self._types:
             raise RegistryError(f"unsupported value type {value_type!r}")
@@ -171,6 +173,9 @@ class WinRegBackend(RegistryBackend):
                 winreg.CloseKey(key)
         except OSError as e:
             raise RegistryError(f"couldn't write {hive}\\{path}\\{name}: {e}") from e
+
+        if self.read_value(hive, path, name) != expected:
+            raise RegistryError(f'Windows did not retain the requested value for {hive}\\{path}\\{name}.')
 
     def delete_value(self, hive, path, name):
         winreg = self._winreg
@@ -229,16 +234,56 @@ class StateStore:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (FileNotFoundError, ValueError, OSError):
+        except FileNotFoundError:
             data = {}
+        except (ValueError, OSError) as exc:
+            raise RegistryError(f'The restore journal cannot be read safely: {exc}') from exc
         if not isinstance(data, dict):
-            data = {}
+            raise RegistryError('The restore journal is not an object; refusing to overwrite it.')
+        if data.get('version', STATE_VERSION) != STATE_VERSION:
+            raise RegistryError('Unsupported restore journal version; repair with a compatible app version.')
         data.setdefault("version", STATE_VERSION)
+        for field in ('families', 'originals'):
+            if field in data and not isinstance(data[field], dict):
+                raise RegistryError(f'The restore journal has an invalid {field} table.')
+        for section in data.get('families', {}).values():
+            if not isinstance(section, dict) or not isinstance(section.get('claims', []), list):
+                raise RegistryError('The restore journal has an invalid family record.')
+            if any(not isinstance(claim, str) for claim in section.get('claims', [])):
+                raise RegistryError('The restore journal has an invalid claim.')
+        if any(not isinstance(entry, dict) for entry in data.get('originals', {}).values()):
+            raise RegistryError('The restore journal has an invalid original record.')
         families = data.get("families")
         data["families"] = families if isinstance(families, dict) else {}
         originals = data.get("originals")
         data["originals"] = originals if isinstance(originals, dict) else {}
         return data
+
+    @contextmanager
+    def exclusive(self):
+        if os.name != 'nt':
+            yield
+            return
+        import win32event
+        import win32api
+        import win32security
+        import pywintypes
+        sa = pywintypes.SECURITY_ATTRIBUTES()
+        sa.SECURITY_DESCRIPTOR = win32security.ConvertStringSecurityDescriptorToSecurityDescriptor(
+            'D:P(A;;GA;;;SY)(A;;GA;;;BA)', 1)
+        mutex = win32event.CreateMutex(sa, False, r'Global\WinHardenState-v1')
+        acquired = False
+        try:
+            result = win32event.WaitForSingleObject(mutex, 30000)
+            if result not in (0, 0x80):
+                raise RegistryError('Another security change is still running. Retry after it finishes.')
+            acquired = True
+            self._data = self._read()
+            yield
+        finally:
+            if acquired:
+                win32event.ReleaseMutex(mutex)
+            win32api.CloseHandle(mutex)
 
     def save(self):
         self._data["version"] = STATE_VERSION
@@ -248,6 +293,8 @@ class StateStore:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self._data, f, indent=2, sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
             # World-readable on purpose: the unprivileged status path reads this
             # to report what is applied, so opening a page never needs elevation.
             os.chmod(tmp, 0o644)
@@ -296,7 +343,7 @@ class StateStore:
         """
         holders = []
         for name, section in self._data["families"].items():
-            if name == excluding or section.get("level", "off") == "off":
+            if name == excluding:
                 continue
             if identity in (section.get("claims") or []):
                 holders.append(name)
@@ -339,6 +386,7 @@ class Transaction:
         self.context.setdefault("registry", self.registry)
         self._section = store.family(family)
         self._capturing = False
+        self._seen = set()
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -351,12 +399,31 @@ class Transaction:
         and the first capture is the true one, whichever family made it.
         """
         self._capturing = self._section["level"] == "off"
-        if self._capturing:
-            self._section["claims"] = []
+        self._seen = set()
+        self._section["incomplete"] = True
+        self.store.save()
         return self._capturing
 
     def commit(self, level, notes=None):
+        # Restore settings dropped when moving to a less restrictive level.
+        # Keep failed claims so a later revert can retry, and do not record the
+        # requested level until all dropped settings have been restored.
+        for identity in list(self._section['claims']):
+            if identity in self._seen:
+                continue
+            if not self.store.other_claimants(identity, excluding=self.family):
+                entry = self.store.originals().get(identity)
+                if entry is None:
+                    raise RegistryError(f'Missing original for {identity}; restoration cannot be verified.')
+                restore = _RESTORERS.get(entry.get('kind'))
+                if restore is None:
+                    raise RegistryError(f'Unknown restore operation for {identity}')
+                restore(entry, self.context)
+                self.store.originals().pop(identity, None)
+            self._section['claims'].remove(identity)
+            self.store.save()
         self._section["level"] = level
+        self._section.pop("incomplete", None)
         if notes is not None:
             self._section["notes"] = notes
         self.store.save()
@@ -380,6 +447,7 @@ class Transaction:
             Revert consults every family's claims before putting anything back.
         """
         originals = self.store.originals()
+        self._seen.add(identity)
         captured = identity not in originals
         if captured:
             record = dict(entry)
@@ -388,6 +456,9 @@ class Transaction:
             originals[identity] = record
         if not self._claimed(identity):
             self._section["claims"].append(identity)
+        # Flush the original BEFORE the corresponding external mutation. A
+        # process crash must not lose the only record of the previous value.
+        self.store.save()
         return captured
 
     def capture_reg(self, hive, path, name):
@@ -395,6 +466,7 @@ class Transaction:
         if hive not in HIVES:
             raise RegistryError(f"unknown hive {hive!r}")
         identity = f"{hive}\\{path.rstrip(chr(92)).lower()}\\{name.lower()}"
+        self._seen.add(identity)
         if identity in self.store.originals() and self._claimed(identity):
             return
         existed, value_type, value = self.registry.read_value(hive, path, name)
@@ -439,6 +511,8 @@ class Transaction:
 
         # Mark this family as off first, so other_claimants() does not count it
         # as a claimant of its own values.
+        self._section["incomplete"] = True
+        self.store.save()
         was_level, self._section["level"] = self._section["level"], "off"
 
         for identity in reversed(self._section["claims"]):
@@ -448,6 +522,8 @@ class Transaction:
                 continue
             entry = originals.get(identity)
             if entry is None:
+                failures.append(({'_id': identity}, RegistryError('The original value was not recorded.')))
+                kept.append(identity)
                 continue
             restore = _RESTORERS.get(entry.get("kind"))
             if restore is None:
@@ -470,6 +546,8 @@ class Transaction:
         self._section["claims"] = kept
         if failures:
             self._section["level"] = was_level
+        else:
+            self._section.pop("incomplete", None)
         self._section["notes"] = {}
         self.store.save()
         return failures

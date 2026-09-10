@@ -1,111 +1,116 @@
-; Inno Setup script for Windows Firewall & Hardening.
-;
-; The installer is self-contained: it carries a bundled CPython and Qt and
-; fetches nothing at install time. Everything the build needed was downloaded on
-; the build machine by scripts\bootstrap.ps1, so an end user with no internet,
-; a proxy, or a locked-down network still gets a working install.
-;
-; The uninstaller does one thing most uninstallers do not: it reverts every
-; change the app applied before removing any files. A hardening tool that leaves
-; its settings behind is worse than one that was never installed -- the settings
-; outlive the app that explains them, and nobody is left who knows what changed.
-
 #define AppName "Windows Firewall & Hardening"
-#define AppShortName "win-harden"
-#define AppVersion "1.0.0"
-#define AppPublisher "jrf"
-#define AppExe "win-harden.exe"
-
+#define AppVersion "1.1.0"
 [Setup]
 AppId={{7C4A1E62-9B3D-4F58-8E21-6D0F5A9C2B14}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher={#AppPublisher}
-DefaultDirName={autopf}\{#AppShortName}
+AppPublisher=jrf
+DefaultDirName={autopf}\win-harden
 DefaultGroupName={#AppName}
 OutputDir=Output
 OutputBaseFilename=WinHardenSetup-{#AppVersion}
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-; The app itself runs unelevated; installing into Program Files needs admin.
 PrivilegesRequired=admin
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
-; Windows 11 (10.0.22000). The app targets features that do not exist earlier.
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0.22000
-UninstallDisplayIcon={app}\{#AppExe}
+UninstallDisplayIcon={app}\win-harden.exe
+SetupIconFile=..\build\win-harden.ico
 LicenseFile=..\LICENSE
 DisableProgramGroupPage=yes
+CloseApplications=force
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
-
-; Every extra is opt-in, separately declinable, and separately reversible.
-; Nothing here is applied silently, and none of it is needed for the app to work.
-Name: "extras"; Description: "Additional security tooling (optional)"; GroupDescription: "Extras:"; Flags: unchecked
-Name: "extras\defender"; Description: "Update Microsoft Defender's signatures now"; GroupDescription: "Extras:"; Flags: unchecked
-Name: "extras\sysmon"; Description: "Install Sysmon with a vetted logging configuration"; GroupDescription: "Extras:"; Flags: unchecked
-Name: "extras\lgpo"; Description: "Download Microsoft's Security Compliance Toolkit and Windows 11 baseline"; GroupDescription: "Extras:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "extras-defender"; Description: "Update Microsoft Defender definitions"; GroupDescription: "Optional extras:"; Flags: unchecked
+Name: "extras-sysmon"; Description: "Install Microsoft Sysmon with vendor defaults"; GroupDescription: "Optional extras:"; Flags: unchecked
+Name: "extras-lgpo"; Description: "Open Microsoft's security baseline download page"; GroupDescription: "Optional extras:"; Flags: unchecked
 
 [Files]
 Source: "..\dist\win-harden\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\scripts\extras.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
-Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
+Source: "..\scripts\secure-download.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\downloads.json"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\verify-windows.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\docs\WINDOWS-VERIFICATION.md"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "..\requirements-win.lock"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
+Name: "{group}\{#AppName}"; Filename: "{app}\win-harden.exe"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\win-harden.exe"; Tasks: desktopicon
+Name: "{commonstartup}\WinHarden download monitor"; Filename: "{app}\win-harden.exe"; Parameters: "--background"
 
 [Run]
-; Extras run after the files are in place, each gated on its own checkbox.
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\scripts\extras.ps1"" -DefenderSignatures"; \
-  StatusMsg: "Updating Defender signatures..."; Flags: runhidden waituntilterminated; Tasks: extras\defender
-
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\scripts\extras.ps1"" -Sysmon"; \
-  StatusMsg: "Installing Sysmon..."; Flags: runhidden waituntilterminated; Tasks: extras\sysmon
-
-Filename: "powershell.exe"; \
-  Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\scripts\extras.ps1"" -SecurityBaseline"; \
-  StatusMsg: "Downloading the Security Compliance Toolkit..."; Flags: runhidden waituntilterminated; Tasks: extras\lgpo
-
-; The app itself is launched unelevated, as the signed-in user -- not as the
-; elevated installer, which would leave it running with rights it must not have.
-Filename: "{app}\{#AppExe}"; Description: "Open {#AppName}"; \
-  Flags: nowait postinstall skipifsilent runasoriginaluser
-
-[UninstallRun]
-; Revert BEFORE the files are removed: the broker doing the reverting is one of
-; the files. RunOnceId keeps this to a single execution.
-Filename: "{app}\win-harden-broker.exe"; Parameters: "--revert-all"; \
-  RunOnceId: "RevertHardening"; Flags: runhidden waituntilterminated; \
-  StatusMsg: "Putting your settings back the way they were..."
+Filename: "https://www.microsoft.com/en-us/download/details.aspx?id=55319"; Tasks: extras-lgpo; Flags: shellexec runasoriginaluser
+Filename: "{app}\win-harden.exe"; Description: "Open {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{app}\scripts"
 Type: dirifempty; Name: "{app}"
 
 [Code]
-function InitializeSetup(): Boolean;
+function RunHelper(const Name, Args: String): Boolean;
+var Code: Integer;
 begin
-  Result := True;
+  Result := Exec(ExpandConstant('{app}\') + Name, Args, ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code);
+  if Result then Result := Code = 0;
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  if CurUninstallStep = usPostUninstall then
+  Result := '';
+  if FileExists(ExpandConstant('{app}\win-harden-scanner.exe')) then
+    if not RunHelper('win-harden-scanner.exe', '--stop') then
+      Result := 'The scan service could not stop. Restart Windows and retry setup.';
+end;
+
+procedure RunExtra(const TaskName, Flag: String);
+var Code: Integer;
+begin
+  if WizardIsTaskSelected(TaskName) then
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\extras.ps1') + '" ' + Flag,
+      ExpandConstant('{app}'), SW_SHOWNORMAL, ewWaitUntilTerminated, Code) or (Code <> 0) then
+      MsgBox('The optional task ' + TaskName + ' failed. The application is installed; retry this extra from scripts\extras.ps1 to see its error.', mbError, MB_OK);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
   begin
-    // The state file records anything that could not be put back, so it is left
-    // deliberately: reinstalling and reverting again will retry those.
-    MsgBox('Your settings have been restored to how they were before this app was installed.'#13#10#13#10 +
-           'If anything could not be put back, it is listed in:'#13#10 +
-           ExpandConstant('{commonappdata}') + '\win-harden\broker.log',
-           mbInformation, MB_OK);
+    if not RunHelper('win-harden-scanner.exe', '--install') then
+      RaiseException('The scan service could not be installed or started. Run setup again to repair it.');
+    RunExtra('extras-defender', '-DefenderSignatures');
+    RunExtra('extras-sysmon', '-Sysmon');
   end;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := False;
+  if not RunHelper('win-harden-scanner.exe', '--stop') then
+  begin
+    MsgBox('The scan service could not stop. Restart Windows and retry uninstall.', mbError, MB_OK);
+    Exit;
+  end;
+  if not RunHelper('win-harden-broker.exe', '--revert-all') then
+  begin
+    MsgBox('Some original settings could not be restored. The app and restore journal have been retained.'#13#10 +
+      'Review C:\ProgramData\win-harden\broker.log, resolve the problem, and retry uninstall.', mbError, MB_OK);
+    RunHelper('win-harden-scanner.exe', '--install');
+    Exit;
+  end;
+  if not RunHelper('win-harden-scanner.exe', '--remove') then
+  begin
+    MsgBox('The scan service could not be removed. Restart Windows and retry uninstall.', mbError, MB_OK);
+    Exit;
+  end;
+  Result := True;
 end;

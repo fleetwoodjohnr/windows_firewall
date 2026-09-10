@@ -80,7 +80,7 @@ class LevelFamilyPage(Page):
             def on_result(result, error):
                 if error is None:
                     self._on_applied(family_id, level, result or {})
-                    done(True)
+                    done(not (result or {}).get('restoreFailures'))
                     return
                 self._on_apply_error(family_id, level, error)
                 # done(False) leaves the selector where the system is. The
@@ -108,7 +108,8 @@ class LevelFamilyPage(Page):
             messages.append(f"Some settings could not be put back and are still applied: {failed}")
 
         family = get_family(family_id)
-        title = f"{family.title} is now {level.label}"
+        title = (f"{family.title}: restoration incomplete" if result.get("restoreFailures")
+                 else f"{family.title} is now {level.label}")
         self.banner.show_message(
             title, "\n\n".join(messages) if messages else "The change is in force now.",
             tone="warning" if messages else "ok")
@@ -140,7 +141,14 @@ class LevelFamilyPage(Page):
             recorded = ((result or {}).get("recorded") or {}).get("families") or {}
             for family_id, selector in self.selectors.items():
                 level = (recorded.get(family_id) or {}).get("level", "off")
+                selector.setEnabled(True)
                 selector.set_active_level(level)
+            incomplete = [family_id for family_id in self.selectors
+                          if (recorded.get(family_id) or {}).get('incomplete')]
+            if incomplete:
+                self.banner.show_message('A previous change is incomplete',
+                    'The displayed levels are the last completed choices. Some settings may have changed. '
+                    'Choose Off to restore the saved originals for: ' + ', '.join(incomplete), tone='warning')
             self.on_status(result or {})
 
         self.broker.status(on_status)
@@ -149,9 +157,10 @@ class LevelFamilyPage(Page):
         """Subclass hook, called with the full status payload."""
 
     def on_status_error(self, error):
+        for selector in self.selectors.values():
+            selector.setEnabled(False)
         self.banner.show_message(
             "Current settings could not be read",
-            f"{error}\n\nThe controls below show Off because nothing could be read, not "
-            f"because nothing is applied. Do not rely on them until this is resolved.",
+            f"{error}\n\nThe controls are disabled because current settings could not be verified.",
             tone="error",
         )

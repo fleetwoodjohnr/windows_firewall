@@ -258,10 +258,10 @@ class DashboardPage(Page):
             self.rows["bitlocker"].set_value("Not reported", "warn")
         elif not protected:
             self.rows["bitlocker"].set_value("Off", "bad")
-        elif any(not v.get("recoveryKeySaved") for v in protected):
-            self.rows["bitlocker"].set_value("On, no saved recovery key", "bad")
+        elif any(not v.get("recoveryProtectorPresent") for v in protected):
+            self.rows["bitlocker"].set_value("On, no recovery password protector", "bad")
         else:
-            self.rows["bitlocker"].set_value("On, key saved", "ok")
+            self.rows["bitlocker"].set_value("On, recovery protector present", "ok")
 
         interfaces = dns.get("interfaces") or []
         encrypted = [i for i in interfaces if i.get("dohEnabled")]

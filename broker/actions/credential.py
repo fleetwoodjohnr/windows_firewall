@@ -34,9 +34,9 @@ _BASIC = [
     # Applies UAC to the built-in Administrator account too, which by default is
     # exempt -- an exemption worth closing on a personal machine.
     Reg("HKLM", POLICIES, "FilterAdministratorToken", "REG_DWORD", 1),
-    # 0 = a standard user gets no elevation prompt at all, rather than being
-    # invited to type an administrator password into whatever asked.
-    Reg("HKLM", POLICIES, "ConsentPromptBehaviorUser", "REG_DWORD", 0),
+    # 1 = prompt standard users for credentials on the secure desktop; this
+    # preserves the ability to approve the app through an administrator account.
+    Reg("HKLM", POLICIES, "ConsentPromptBehaviorUser", "REG_DWORD", 1),
 
     # -- stop handing out information to unauthenticated callers --------------
     Reg("HKLM", LSA, "RestrictAnonymous", "REG_DWORD", 1),
@@ -55,8 +55,7 @@ _BALANCED = [
     # lsass.exe becomes a protected process: even a program running as
     # Administrator cannot read its memory. This is what stops Mimikatz.
     # Takes effect at the next boot.
-    Reg("HKLM", LSA, "RunAsPPL", "REG_DWORD", 1),
-    Reg("HKLM", LSA, "RunAsPPLBoot", "REG_DWORD", 2),
+    Reg("HKLM", LSA, "RunAsPPL", "REG_DWORD", 2),
 
     # Only Administrators may query the SAM remotely. The SDDL string is
     # Microsoft's documented value for this setting, not one we composed.
@@ -84,7 +83,7 @@ _STRICT = [
     # protection): DMA protection is unavailable on a lot of otherwise capable
     # hardware, and requiring it there means VBS silently never starts.
     Reg("HKLM", DEVICE_GUARD, "RequirePlatformSecurityFeatures", "REG_DWORD", 1),
-    Reg("HKLM", DEVICE_GUARD, "LsaCfgFlags", "REG_DWORD", 1),
+    Reg("HKLM", LSA, "LsaCfgFlags", "REG_DWORD", 2),
     Reg("HKLM", HVCI, "Enabled", "REG_DWORD", 1),
 ]
 
@@ -98,14 +97,9 @@ REBOOT_REQUIRED_FROM = ("balanced", "strict")
 def apply(txn, level, ctx):
     applied = apply_settings(txn, ctx, LEVELS, level)
 
-    # The Guest account is disabled through the toggle path rather than the
-    # registry, because deleting a registry value would not re-enable an account
-    # that was disabled some other way.
-    if ctx.runner is not None:
-        try:
-            ctx.runner("set-toggle.ps1", {"Toggle": "guest-account", "State": "off"})
-        except Exception:  # noqa: BLE001 - a machine with no Guest account is fine
-            pass
+    from .system_state import capture
+    capture(txn, ctx, 'guest')
+    ctx.runner('set-toggle.ps1', {'Toggle': 'guest-account', 'State': 'off'})
 
     return {
         "settingsApplied": len(applied),
@@ -135,6 +129,6 @@ def status(ctx):
         "wdigestPlaintext": read("HKLM", WDIGEST, "UseLogonCredential"),
         "lmCompatibilityLevel": read("HKLM", LSA, "LmCompatibilityLevel"),
         "vbsEnabled": read("HKLM", DEVICE_GUARD, "EnableVirtualizationBasedSecurity"),
-        "credentialGuard": read("HKLM", DEVICE_GUARD, "LsaCfgFlags"),
+        "credentialGuard": read("HKLM", LSA, "LsaCfgFlags"),
         "hvci": read("HKLM", HVCI, "Enabled"),
     }

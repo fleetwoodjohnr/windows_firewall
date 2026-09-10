@@ -231,14 +231,14 @@ EXPLOIT = Family(
         Level(
             id="strict",
             label="Strict",
-            summary="Mandatory ASLR, and BitLocker must be on with its recovery key saved.",
+            summary="Mandatory ASLR; requires BitLocker with a recovery protector.",
             detail=(
                 "Everything in Balanced, plus mandatory address space randomisation for programs that "
-                "did not opt into it themselves, and a stricter Controlled Folder Access posture.\n\n"
+                "did not opt into it themselves. Controlled Folder Access remains enabled.\n\n"
                 "This level also requires full disk encryption. It will not apply until BitLocker is "
-                "on and its recovery key has been saved somewhere you can actually reach — your "
-                "Microsoft account, a printout, or a file on a different drive. If no key is saved, "
-                "the level is refused with an explanation rather than applied."
+                "on with a recovery password protector present. The app cannot verify whether the "
+                "recovery key is backed up. Save it to your Microsoft account, a printout, or a "
+                "different drive before changing encryption or boot settings."
             ),
             breaks=(
                 "Mandatory ASLR is the one setting here that breaks real, current software. Programs "
@@ -430,8 +430,8 @@ CREDENTIAL = Family(
                 "becomes unreliable. Older device drivers that fail hypervisor-enforced code integrity "
                 "will not load, which on a laptop can mean a peripheral simply stops working after the "
                 "reboot.\n\n"
-                "It also cannot be turned off casually: reverting requires a reboot and, on some "
-                "machines, clearing a UEFI variable. Read the reboot note above before choosing this, "
+                "Reverting requires a reboot. The app requests protection without adding a UEFI lock; "
+                "an existing firmware-locked policy can still require manual recovery. Read the reboot note before choosing this, "
                 "and do not choose it on a machine you cannot afford to troubleshoot."
             ),
         ),

@@ -8,7 +8,7 @@ from broker.protocol import ERR_BLOCKED, ERR_GUARD, validate_request
 
 
 def req(**kw):
-    return validate_request({"protocol": 1, "id": "r", **kw})
+    return validate_request({"protocol": 2, "id": "r", **kw})
 
 
 class TestRdpLockout:

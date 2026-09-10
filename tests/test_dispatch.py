@@ -56,7 +56,7 @@ def env(tmp_path):
 
 
 def call(dispatcher, **kw):
-    frame = dispatcher.handle_frame({"protocol": 1, "id": "r1", **kw})
+    frame = dispatcher.handle_frame({"protocol": 2, "id": "r1", **kw})
     _rid, ok, result, kind, message = decode_response(frame)
     return ok, result, kind, message
 
@@ -125,7 +125,7 @@ class TestRejection:
     def test_rejects_a_protocol_mismatch(self, env):
         dispatcher, *_ = env
         _rid, ok, _r, kind, _m = decode_response(
-            dispatcher.handle_frame({"protocol": 2, "id": "r1", "verb": "ping"}))
+            dispatcher.handle_frame({"protocol": 99, "id": "r1", "verb": "ping"}))
         assert not ok and kind == ERR_PROTOCOL
 
     def test_answers_even_an_unparseable_request(self, env):

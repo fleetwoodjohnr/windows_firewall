@@ -24,17 +24,18 @@ param(
     [string]$State
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $on = ($State -eq 'on')
 
 function Set-ServiceState {
     param([string]$Name, [bool]$Enabled)
     $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
-    if (-not $svc) { return }   # not installed is already the state we wanted
+    if (-not $svc) { if ($Enabled) { throw "Service $Name is not installed or is unavailable." }; return }   # not installed is already the state we wanted
     if ($Enabled) {
         Set-Service -Name $Name -StartupType Automatic
-        Start-Service -Name $Name -ErrorAction SilentlyContinue
+        Start-Service -Name $Name -ErrorAction Stop
     } else {
-        Stop-Service -Name $Name -Force -ErrorAction SilentlyContinue
+        Stop-Service -Name $Name -Force -ErrorAction Stop
         Set-Service -Name $Name -StartupType Disabled
     }
 }
@@ -64,10 +65,10 @@ try {
             Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' `
                              -Name 'fDenyTSConnections' -Value $deny -Type DWord
             if ($on) {
-                Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
+                Enable-NetFirewallRule -Name 'RemoteDesktop*' -ErrorAction Stop
                 Set-ServiceState -Name 'TermService' -Enabled $true
             } else {
-                Disable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue
+                Disable-NetFirewallRule -Name 'RemoteDesktop*' -ErrorAction Stop
             }
         }
 
@@ -84,35 +85,23 @@ try {
             Set-NetFirewallProfile -All -DefaultInboundAction $action
         }
 
-        'panic-mode' {
-            # Block inbound AND outbound on every profile. The firewall itself is
-            # force-enabled first: setting a default action on a disabled profile
-            # changes a value that is not being enforced, which would look like
-            # panic mode was on while all traffic flowed.
-            if ($on) {
-                Set-NetFirewallProfile -All -Enabled True `
-                    -DefaultInboundAction Block -DefaultOutboundAction Block
-            } else {
-                Set-NetFirewallProfile -All -DefaultInboundAction NotConfigured `
-                    -DefaultOutboundAction NotConfigured
-            }
-        }
+        'panic-mode' { throw 'Panic mode must use its journalled broker operation.' }
 
         'netbios' {
             # Per-interface, under NetBT. 2 = disable NetBIOS over TCP/IP;
             # 0 = use the DHCP server's setting, which is the Windows default.
             $value = if ($on) { 0 } else { 2 }
             $root = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
-            foreach ($key in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
+            foreach ($key in (Get-ChildItem $root -ErrorAction Stop)) {
                 Set-ItemProperty -Path $key.PSPath -Name 'NetbiosOptions' -Value $value -Type DWord `
-                                 -ErrorAction SilentlyContinue
+                                 -ErrorAction Stop
             }
         }
 
         'guest-account' {
-            $guest = Get-LocalUser -Name 'Guest' -ErrorAction SilentlyContinue
+            $guest = Get-LocalUser | Where-Object { $_.SID.Value -match '-501$' }
             if ($guest) {
-                if ($on) { Enable-LocalUser -Name 'Guest' } else { Disable-LocalUser -Name 'Guest' }
+                if ($on) { $guest | Enable-LocalUser } else { $guest | Disable-LocalUser }
             }
         }
     }

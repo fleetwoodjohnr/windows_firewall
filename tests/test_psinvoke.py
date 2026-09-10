@@ -139,5 +139,6 @@ def _sample(name):
         "Action": "block", "State": "off", "Category": "Public", "Toggle": "rdp",
         "RuleId": "BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550", "InterfaceIndex": "3",
         "Group": "Remote Desktop", "Setting": "cloudBlockLevel", "Value": "High",
-        "Mitigation": "dep",
+        "Mitigation": "dep", "Resource": "firewall", "Data": "W10=",
+        "ServiceName": "WinRM", "StartupType": "Manual",
     }[name]

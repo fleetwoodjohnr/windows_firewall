@@ -69,6 +69,7 @@ class PowerShellRunner(QObject):
             timer = state["timer"]
             if timer is not None:
                 timer.stop()
+                timer.deleteLater()
             self._running.pop(id(process), None)
             # Disconnect before deleting. Qt can still emit finished() or
             # errorOccurred() for a process that is on its way out, and a handler

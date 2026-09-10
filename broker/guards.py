@@ -91,21 +91,25 @@ class WindowsProbes(Probes):  # pragma: no cover - Windows-only
                 self._cache[script] = {}
         return self._cache[script]
 
+    def refresh(self):
+        self._cache.clear()
+
     def is_remote_session(self):
-        # SESSIONNAME is RDP-Tcp#N inside a Remote Desktop session and Console on
-        # the physical machine. Absent means we could not tell, and the safe
-        # answer to "might disabling RDP cut me off" is yes.
-        name = os.environ.get("SESSIONNAME")
-        if name is None:
+        try:
+            import win32ts
+            protocol = win32ts.WTSQuerySessionInformation(
+                win32ts.WTS_CURRENT_SERVER_HANDLE, win32ts.WTS_CURRENT_SESSION,
+                win32ts.WTSClientProtocolType)
+            return protocol != 0
+        except Exception:
             return True
-        return not name.upper().startswith("CONSOLE")
 
     def bitlocker_recovery_key_saved(self):
         status = self._status("status-hardening.ps1")
         volumes = status.get("bitlocker") or []
         if not volumes:
             return False
-        return all(bool(v.get("recoveryKeySaved")) for v in volumes)
+        return all(bool(v.get("protectionOn")) and bool(v.get("recoveryProtectorPresent", v.get("recoveryKeySaved"))) for v in volumes)
 
     def ssh_authorized_key_present(self):
         return bool(self._status("status-services.ps1").get("sshAuthorizedKeyPresent"))
@@ -136,11 +140,10 @@ RDP_LOCKOUT = (
 )
 
 BITLOCKER_NO_KEY = (
-    "BitLocker will not be switched on until its recovery key is saved somewhere.\n\n"
-    "Without that key, a firmware update, a TPM reset or a failed boot will ask for a "
-    "password that does not exist anywhere, and every file on the drive is gone for good. "
-    "Save the recovery key to your Microsoft account, a printout, or a file on a different "
-    "drive first, then apply this level again."
+    "Strict requires BitLocker protection with a recovery key protector present. "
+    "The app could not verify those prerequisites. It does not enable encryption "
+    "or verify that your recovery key has been backed up.\n\nOpen Windows Settings "
+    "to configure encryption and save your recovery key before retrying."
 )
 
 TAMPER_PROTECTED = (
@@ -173,6 +176,10 @@ def check(request, probes):
     is one place to look for "what will this app refuse to do".
     """
     verb = request["verb"]
+
+    if verb == 'set-toggle' and request['toggle'] == 'panic-mode' and request['enabled']:
+        if probes.is_remote_session():
+            return Refusal(ERR_GUARD, 'Panic mode would disconnect this remote session. Apply it at the computer itself.')
 
     if verb == "set-toggle" and request["toggle"] == "rdp" and request["enabled"] is False:
         if probes.is_remote_session():

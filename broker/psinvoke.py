@@ -46,10 +46,16 @@ BASE_FLAGS = (
     "-OutputFormat", "Text",
 )
 
-POWERSHELL = "powershell.exe"
+from scanner.paths import system_powershell
+POWERSHELL = system_powershell()
 
 # Parameter value patterns. A parameter whose name is not here cannot be passed.
 PARAM_PATTERNS = {
+    'Reset': r'^(yes|no)$',
+    'Resource': r'^(firewall|netbios|guest|dns)$',
+    'Data': r'^[A-Za-z0-9+/=]{1,65536}$',
+    'ServiceName': r'^(RemoteRegistry|WinRM|TermService|sshd)$',
+    'StartupType': r'^(Automatic|Manual|Disabled|AutomaticDelayedStart)$',
     "Level": r"^(off|basic|balanced|strict)$",
     "Provider": r"^(automatic|quad9|cloudflare|mullvad|adguard)$",
     "Profile": r"^(Domain|Private|Public|All)$",
@@ -67,10 +73,10 @@ PARAM_PATTERNS = {
     # into an elevated process.
     "Setting": r"^(mapsReporting|submitSamples|cloudBlockLevel|puaProtection"
                r"|controlledFolderAccess|networkProtection|cloudExtendedTimeout"
-               r"|realtimeMonitoring)$",
+               r"|realtimeMonitoring|ioavProtection)$",
     "Value": r"^(Disabled|Basic|Advanced|AlwaysPrompt|SendSafeSamples|NeverSend"
              r"|SendAllSamples|Default|Moderate|High|HighPlus|ZeroTolerance"
-             r"|Enabled|AuditMode|True|False|0|10|20|30|40|50)$",
+             r"|Enabled|AuditMode|BlockDiskModificationOnly|AuditDiskModificationOnly|True|False|0|10|20|30|40|50)$",
     "Mitigation": r"^(dep|aslr-bottomup|aslr-highentropy|aslr-force|sehop|cfg)$",
     # A firewall rule group's display name is the one parameter carrying text we
     # did not author -- Windows supplies it and the GUI hands it back. It is
@@ -78,7 +84,7 @@ PARAM_PATTERNS = {
     # into a -File script, and the pattern below excludes quotes, $, ;, | and
     # backtick so that a group name cannot resemble PowerShell syntax even if
     # some future caller did the wrong thing with it.
-    "Group": r"^[A-Za-z0-9 ()/.,+&_'-]{1,128}$",
+    "Group": r"^[\w ()/.,+&_'-]{1,128}$",
 }
 
 # Every switchable component, as one authoritative list.
@@ -111,6 +117,9 @@ PARAM_PATTERNS["Toggle"] = "^(" + "|".join(TOGGLE_IDS) + ")$"
 # script file name -> the parameters it accepts. Required params are listed in
 # `required`; anything in `optional` may be omitted.
 SCRIPTS = {
+    'status-system.ps1': {'required': ('Resource',), 'optional': ()},
+    'restore-system.ps1': {'required': ('Resource', 'Data'), 'optional': ()},
+    'set-service.ps1': {'required': ('ServiceName', 'StartupType', 'State'), 'optional': ()},
     # -- reads: run unelevated by the GUI, never prompt ------------------------
     "status-firewall.ps1": {"required": (), "optional": ()},
     "status-network.ps1": {"required": (), "optional": ()},
@@ -124,10 +133,10 @@ SCRIPTS = {
     "set-panic.ps1": {"required": ("State",), "optional": ()},
     "set-network-category.ps1": {"required": ("InterfaceIndex", "Category"), "optional": ()},
     "set-dns-provider.ps1": {"required": ("InterfaceIndex", "Provider"), "optional": ()},
-    "set-asr.ps1": {"required": ("RuleId", "Action"), "optional": ()},
+    "set-asr.ps1": {"required": ("RuleId", "Action"), "optional": ('Reset',)},
     "set-toggle.ps1": {"required": ("Toggle", "State"), "optional": ()},
     "set-defender.ps1": {"required": ("Setting", "Value"), "optional": ()},
-    "set-mitigation.ps1": {"required": ("Mitigation", "State"), "optional": ()},
+    "set-mitigation.ps1": {"required": ("Mitigation", "State"), "optional": ('Reset',)},
 }
 
 # Reads are the subset the GUI may run in its own unelevated process.

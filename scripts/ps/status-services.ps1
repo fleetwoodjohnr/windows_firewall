@@ -9,11 +9,14 @@
   out of a machine they only reach over the network.
 #>
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $out = [ordered]@{}
 
 $watched = @('RemoteRegistry','WinRM','TermService','sshd','WinHttpAutoProxySvc','LanmanServer')
 $services = @()
+$out.serviceErrors = @{}
+$out.featureErrors = @{}
 foreach ($name in $watched) {
     try {
         $s = Get-Service -Name $name -ErrorAction Stop
@@ -25,7 +28,7 @@ foreach ($name in $watched) {
         }
     }
     catch {
-        # Not installed is a legitimate answer, not a failure.
+        if ($_.FullyQualifiedErrorId -notlike 'NoServiceFoundForGivenName*') { $out.serviceErrors[$name] = $_.Exception.Message }
     }
 }
 $out.services = $services
@@ -35,7 +38,7 @@ foreach ($name in @('SMB1Protocol')) {
     try {
         $f = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction Stop
         $features += [ordered]@{ name = [string]$f.FeatureName; enabled = ($f.State -eq 'Enabled') }
-    } catch { }
+    } catch { $out.featureErrors[$name] = $_.Exception.Message }
 }
 $out.features = $features
 
@@ -68,7 +71,7 @@ foreach ($path in $candidates) {
 }
 $out.sshAuthorizedKeyPresent = $keyFound
 
-try { $out.guestAccountEnabled = [bool](Get-LocalUser -Name 'Guest' -ErrorAction Stop).Enabled }
+try { $out.guestAccountEnabled = [bool](Get-LocalUser -ErrorAction Stop | Where-Object { $_.SID.Value -match '-501$' } | Select-Object -First 1).Enabled }
 catch { $out.guestAccountEnabled = $null }
 
 $out | ConvertTo-Json -Depth 5 -Compress

@@ -30,6 +30,8 @@ class AppSettings:
         "show_advanced_rules": False,
         "last_page": "dashboard",
         "confirm_strict": True,
+        "watch_folders": [],
+        "downloads_initialized": False,
     }
 
     def __init__(self, path=None):
@@ -68,6 +70,7 @@ class AppSettings:
             # corrupt file into an enabled setting -- the one direction a
             # settings bug must never fail in.
             self._values[name] = value if type(value) is type(default) else default
+        self._values["watch_folders"] = [p for p in self._values["watch_folders"] if isinstance(p, str)]
         self._loading = False
 
     def _save(self):

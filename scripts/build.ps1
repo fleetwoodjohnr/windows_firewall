@@ -1,95 +1,38 @@
-<#
-.SYNOPSIS
-  Builds win-harden.exe, win-harden-broker.exe, and the installer.
-
-  Two executables rather than one, because they need different manifests: the
-  GUI is asInvoker and the broker is requireAdministrator. That difference is
-  the entire elevation design, so it is enforced here at build time rather than
-  being left to how someone happens to launch them.
-#>
 [CmdletBinding()]
-param(
-    [string]$Python = 'python',
-    [switch]$SkipInstaller
-)
+param([string]$Python = 'python', [string]$Iscc, [switch]$SkipInstaller)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 Push-Location $repo
-
-function Write-Step { param([string]$Message) Write-Host "`n==> $Message" -ForegroundColor Cyan }
-
 try {
-    Write-Step "Cleaning previous output"
-    foreach ($dir in 'build','dist') {
-        if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+    if (-not [Environment]::Is64BitProcess -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw 'Build on Windows x64.' }
+    & $Python -c "import struct,sys; assert struct.calcsize('P') == 8 and sys.platform == 'win32'"
+    if ($LASTEXITCODE) { throw 'The build Python must target Windows x64.' }
+    & $Python scripts\make-icon.py
+    if ($LASTEXITCODE) { throw 'Icon generation failed.' }
+    & $Python -m PyInstaller --noconfirm --clean installer\win-harden.spec
+    if ($LASTEXITCODE) { throw 'PyInstaller failed.' }
+    foreach ($path in @('win-harden.exe','win-harden-broker.exe','win-harden-scanner.exe',
+                        '_internal\scripts\ps\set-toggle.ps1','_internal\win_harden\style.qss',
+                        '_internal\scanner\ps\operation.ps1','_internal\scanner\ps\status.ps1')) {
+        if (-not (Test-Path -LiteralPath "dist\win-harden\$path")) { throw "Missing bundled resource: $path" }
     }
-
-    $common = @(
-        '--noconfirm', '--clean',
-        '--distpath', 'dist',
-        '--workpath', 'build',
-        '--specpath', 'build',
-        # The scripts are read at runtime from beside the exe, so they ship as
-        # data rather than being frozen in.
-        '--add-data', "scripts\ps;scripts\ps"
-    )
-
-    Write-Step "Building the GUI (asInvoker)"
-    & $Python -m PyInstaller @common `
-        --name 'win-harden' `
-        --windowed `
-        --manifest 'installer\app.manifest' `
-        --icon 'installer\win-harden.ico' `
-        --collect-submodules win_harden `
-        --collect-submodules broker `
-        'win-harden.py'
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed building the GUI" }
-
-    Write-Step "Building the broker (requireAdministrator)"
-    & $Python -m PyInstaller @common `
-        --name 'win-harden-broker' `
-        --console `
-        --manifest 'installer\broker.manifest' `
-        --collect-submodules broker `
-        --exclude-module PySide6 `
-        'win-harden-broker.py'
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed building the broker" }
-
-    # The GUI locates the broker beside its own executable (broker_path() in
-    # backend/broker_client.py), so the two one-folder builds are merged.
-    Write-Step "Merging the broker into the app folder"
-    Copy-Item 'dist\win-harden-broker\*' 'dist\win-harden\' -Recurse -Force
-    Remove-Item 'dist\win-harden-broker' -Recurse -Force
-
-    foreach ($exe in 'win-harden.exe','win-harden-broker.exe') {
-        $path = "dist\win-harden\$exe"
-        if (-not (Test-Path $path)) { throw "$exe was not produced" }
-        Write-Host ("  {0,-26} {1:N1} MB" -f $exe, ((Get-Item $path).Length / 1MB))
+    & $Python scripts\verify-package.py dist\win-harden
+    if ($LASTEXITCODE) { throw 'Frozen package validation failed.' }
+    & $Python -m pip list --format=json | Set-Content dist\win-harden\dependencies.json -Encoding UTF8
+    if ($LASTEXITCODE) { throw 'Could not record build dependencies.' }
+    if ($SkipInstaller) { return }
+    if (-not $Iscc) {
+        $Iscc = @('C:\Program Files (x86)\Inno Setup 6\ISCC.exe','C:\Program Files\Inno Setup 6\ISCC.exe') |
+            Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     }
-    if (-not (Test-Path 'dist\win-harden\scripts\ps\set-toggle.ps1')) {
-        throw "The PowerShell scripts were not bundled; the app would be unable to change anything."
-    }
-
-    if ($SkipInstaller) {
-        Write-Step "Done (installer skipped)"
-        Write-Host "Run it from dist\win-harden\win-harden.exe"
-        return
-    }
-
-    Write-Step "Building the installer"
-    $iscc = @(
-        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
-        'C:\Program Files\Inno Setup 6\ISCC.exe'
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $iscc) {
-        Write-Warning "Inno Setup was not found, so no installer was built. The app in dist\win-harden is complete and runnable."
-        return
-    }
-    & $iscc 'installer\win-harden.iss'
-    if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
-
-    $setup = Get-ChildItem 'installer\Output\*.exe' | Select-Object -First 1
-    Write-Step "Done"
-    Write-Host "Installer: $($setup.FullName)" -ForegroundColor Green
-}
-finally { Pop-Location }
+    if (-not $Iscc -or -not (Test-Path -LiteralPath $Iscc)) { throw 'Inno Setup is missing. Run scripts\bootstrap.ps1.' }
+    & $Iscc installer\win-harden.iss
+    if ($LASTEXITCODE) { throw 'Inno Setup failed.' }
+    $setup = Get-Item installer\Output\WinHardenSetup-1.1.0.exe
+    $script:SecurityRoot = $repo
+    . (Join-Path $PSScriptRoot 'secure-download.ps1')
+    Assert-ScannedFile -Path $setup.FullName
+    $hash = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $($setup.Name)" | Set-Content ($setup.FullName + '.sha256') -Encoding ASCII
+    Write-Host "Installer: $($setup.FullName)"
+} finally { Pop-Location }

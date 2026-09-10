@@ -12,10 +12,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][ValidateSet('Domain','Private','Public','All')][string]$Profile,
-    [Parameter(Mandatory)][ValidatePattern("^[A-Za-z0-9 ()/.,+&_'-]{1,128}$")][string]$Group,
+    [Parameter(Mandatory)][ValidatePattern("^[\w ()/.,+&_'-]{1,128}$")][string]$Group,
     [Parameter(Mandatory)][ValidateSet('on','off')][string]$State
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 try {
     $rules = Get-NetFirewallRule -DisplayGroup $Group -Direction Inbound -ErrorAction Stop
@@ -28,6 +29,11 @@ try {
     }
     if ($State -eq 'on') { $rules | Enable-NetFirewallRule }
     else                 { $rules | Disable-NetFirewallRule }
+    $wanted = if ($State -eq 'on') { 'True' } else { 'False' }
+    foreach ($rule in @($rules)) {
+        $actual = Get-NetFirewallRule -PolicyStore ActiveStore -Name $rule.Name
+        if ([string]$actual.Enabled -ne $wanted) { throw 'Windows policy prevented this rule change.' }
+    }
     @{ group = $Group; profile = $Profile; state = $State; rules = @($rules).Count } |
         ConvertTo-Json -Compress
 }

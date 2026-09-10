@@ -54,7 +54,7 @@ class TestManifests:
 
 
 class TestEntryPoints:
-    @pytest.mark.parametrize("name", ["win-harden.py", "win-harden-broker.py"])
+    @pytest.mark.parametrize("name", ["win-harden.py", "win-harden-broker.py", "win-harden-scanner.py"])
     def test_entry_point_exists(self, name):
         assert (ROOT / name).exists()
 
@@ -65,62 +65,85 @@ class TestEntryPoints:
         assert "from broker.broker import main" in (ROOT / "win-harden-broker.py").read_text()
 
 
+def packaged_objects():
+    records = []
+    class Node:
+        def __init__(self, kind, args, kwargs):
+            self.kind, self.args, self.kwargs = kind, args, kwargs
+            self.pure, self.scripts, self.binaries, self.datas = [], [], [], []
+    def factory(kind):
+        def make(*args, **kwargs):
+            node = Node(kind, args, kwargs)
+            records.append(node)
+            return node
+        return make
+    scope = {name: factory(name) for name in ('Analysis', 'PYZ', 'EXE', 'COLLECT')}
+    scope['SPECPATH'] = str(ROOT / 'installer')
+    spec = ROOT / 'installer' / 'win-harden.spec'
+    exec(compile(spec.read_text(), str(spec), 'exec'), scope)
+    return records
+
+
 class TestBuildScript:
-    def test_builds_both_executables(self):
-        assert "--name 'win-harden'" in BUILD
-        assert "--name 'win-harden-broker'" in BUILD
+    def test_shared_bundle_has_three_executables(self):
+        records = packaged_objects()
+        exes = [n for n in records if n.kind == 'EXE']
+        assert {e.kwargs['name'] for e in exes} == {'win-harden', 'win-harden-broker', 'win-harden-scanner'}
+        collect = [n for n in records if n.kind == 'COLLECT']
+        assert len(collect) == 1
+        assert all(e in collect[0].args for e in exes)
+        for exe in exes:
+            manifest = Path(exe.kwargs['manifest']).name
+            assert manifest_level(manifest) == ('requireAdministrator' if exe.kwargs['name'].endswith('broker') else 'asInvoker')
 
-    def test_each_executable_gets_its_own_manifest(self):
-        assert r"--manifest 'installer\app.manifest'" in BUILD
-        assert r"--manifest 'installer\broker.manifest'" in BUILD
+    def test_privileged_bundles_exclude_qt_and_all_include_actions(self):
+        for node in packaged_objects():
+            if node.kind != 'Analysis':
+                continue
+            assert 'broker.actions.defender' in node.kwargs['hiddenimports']
+            for source, dest in node.kwargs['datas']:
+                assert Path(source).exists()
+            assert any(dest == 'scanner/ps' for _, dest in node.kwargs['datas'])
+            if Path(node.args[0][0]).name != 'win-harden.py':
+                assert 'PySide6' in node.kwargs['excludes']
 
-    def test_the_powershell_scripts_are_bundled(self):
-        """The app can read state without them but cannot change anything, so a
-        build that omits them produces a plausible-looking, inert app."""
-        assert r"'--add-data', \"scripts\ps;scripts\ps\"" in BUILD or \
-               "scripts\\ps;scripts\\ps" in BUILD
-
-    def test_the_build_verifies_the_scripts_landed(self):
-        assert "set-toggle.ps1" in BUILD, "the build does not check that the scripts were bundled"
-
-    def test_the_broker_does_not_bundle_qt(self):
-        """The broker is a transport loop; shipping a GUI toolkit inside the
-        elevated process is pure attack surface."""
-        assert "--exclude-module PySide6" in BUILD
-
-    def test_the_broker_ends_up_beside_the_gui(self):
-        # broker_path() in backend/broker_client.py looks for it there.
-        assert "Copy-Item 'dist\\win-harden-broker\\*' 'dist\\win-harden\\'" in BUILD
+    def test_build_runs_frozen_validation(self):
+        assert 'verify-package.py' in BUILD
+        assert 'set-toggle.ps1' in BUILD
 
 
 class TestBootstrap:
-    def test_installs_every_runtime_dependency(self):
-        for package in ("PySide6", "pywin32", "pyinstaller"):
-            assert package in BOOTSTRAP, f"{package} is never installed"
+    def test_dependencies_pinned_hashed_and_scanned_before_install(self):
+        lock = (ROOT / 'requirements-win.lock').read_text().lower()
+        for package in ('pyside6', 'pywin32', 'pyinstaller'):
+            assert package + '==' in lock
+        assert '--require-hashes' in BOOTSTRAP and '--only-binary=:all:' in BOOTSTRAP
+        assert BOOTSTRAP.index('Assert-ScannedFile -Path $wheel.FullName') < BOOTSTRAP.index("'pip','install'")
+        # pywin32 explicitly forbids postinstall in a virtual environment.
+        assert not re.search(r'[-m ]pywin32_postinstall', BOOTSTRAP)
 
-    def test_runs_pywin32_postinstall(self):
-        """pywin32 ships DLLs that need registering; without this the named pipe
-        code fails at runtime with an import error."""
-        assert "pywin32_postinstall" in BOOTSTRAP
+    def test_pinned_vendor_installers(self):
+        import json
+        manifest = json.loads((ROOT / 'scripts/downloads.json').read_text())
+        for name in ('python', 'inno', 'sysmon'):
+            assert re.fullmatch(r'[a-fA-F0-9]{64}', manifest[name]['sha256'])
+            assert manifest[name]['url'].startswith('https://')
+        assert 'Get-VerifiedDownload' in BOOTSTRAP
 
     def test_refuses_to_build_from_a_failing_tree(self):
-        assert "pytest" in BOOTSTRAP
-        assert "Not building an installer from a failing tree" in BOOTSTRAP
-
-    def test_explains_itself_when_winget_is_missing(self):
-        assert "winget is not available" in BOOTSTRAP
-        assert "python.org/downloads" in BOOTSTRAP
+        assert 'pytest' in BOOTSTRAP
+        assert 'Not building an installer from a failing tree' in BOOTSTRAP
 
 
 class TestInstaller:
     def test_reverts_before_removing_files(self):
         """The broker doing the reverting is one of the files being removed, so
         order is load-bearing."""
-        assert "[UninstallRun]" in ISS
-        assert "--revert-all" in ISS
-        run_at = ISS.index("[UninstallRun]")
-        delete_at = ISS.index("[UninstallDelete]")
-        assert run_at < delete_at
+        uninstall = ISS.split('function InitializeUninstall(): Boolean;')[1]
+        assert uninstall.index('--revert-all') < uninstall.index('--remove')
+        assert 'Result := False' in uninstall
+        assert 'retained' in uninstall
+        assert 'Exit;' in uninstall
 
     def test_the_broker_supports_the_flag_the_installer_calls(self):
         broker = (ROOT / "broker" / "broker.py").read_text(encoding="utf-8")

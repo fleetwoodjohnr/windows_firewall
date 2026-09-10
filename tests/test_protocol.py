@@ -40,7 +40,7 @@ class TestTables:
 class TestValidation:
     def test_accepts_a_well_formed_request(self):
         out = p.validate_request(req(verb="apply", family="dns", level="strict"))
-        assert out == {"protocol": 1, "id": "r1", "verb": "apply", "family": "dns", "level": "strict"}
+        assert out == {"protocol": 2, "id": "r1", "verb": "apply", "family": "dns", "level": "strict"}
 
     @pytest.mark.parametrize("level", ["", "STRICT", "strict ", "off; shutdown", "../off", None, 1])
     def test_rejects_a_level_outside_the_fixed_list(self, level):
@@ -68,7 +68,7 @@ class TestValidation:
     def test_drops_fields_the_verb_did_not_declare(self):
         # An unexpected key must not ride along into an action module.
         out = p.validate_request(req(verb="revert", family="dns", path="C:\\Windows", level="strict"))
-        assert out == {"protocol": 1, "id": "r1", "verb": "revert", "family": "dns"}
+        assert out == {"protocol": 2, "id": "r1", "verb": "revert", "family": "dns"}
         assert "path" not in out and "level" not in out
 
     def test_bool_field_rejects_an_int(self):
@@ -87,7 +87,7 @@ class TestValidation:
     def test_requires_a_usable_request_id(self):
         for bad in ["", None, 5]:
             with pytest.raises(p.ProtocolError):
-                p.validate_request({"protocol": 1, "id": bad, "verb": "ping"})
+                p.validate_request({"protocol": 2, "id": bad, "verb": "ping"})
 
     def test_rejects_a_non_object(self):
         for bad in [[], "ping", None, 5]:
@@ -171,3 +171,9 @@ class TestFraming:
     def test_rejects_an_oversized_frame(self):
         with pytest.raises(p.ProtocolError):
             p.decode_frame(b"x" * (p.MAX_FRAME_BYTES + 1))
+
+
+@pytest.mark.parametrize('name', ['Partage de fichiers et imprimantes', 'Datei- und Druckerfreigabe', '文件和打印机共享'])
+def test_localized_rule_groups_are_valid(name):
+    out = p.validate_request(req(verb='set-rule-group', profile='Public', group=name, enabled=False))
+    assert out['group'] == name

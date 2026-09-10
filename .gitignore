@@ -3,6 +3,8 @@ __pycache__/
 build/
 dist/
 *.spec
+!installer/win-harden.spec
 installer/Output/
 .venv/
 .pytest_cache/
+.venv-build/

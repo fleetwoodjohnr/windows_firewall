@@ -70,7 +70,7 @@ def _restore_preference(entry, context):
         # We could not read the prior value, so we do not guess one. Leaving it
         # is honest; writing a default would be inventing state the machine
         # never had.
-        return
+        raise RuntimeError('The original Defender preference was not recorded; automatic restoration is unavailable.')
     runner("set-defender.ps1", {"Setting": entry["setting"], "Value": str(value)})
 
 
@@ -78,7 +78,10 @@ def _restore_asr(entry, context):
     runner = context.get("runner")
     if runner is None:
         return
-    runner("set-asr.ps1", {"RuleId": entry["guid"], "Action": entry.get("action") or "off"})
+    if 'present' not in entry:
+        raise RuntimeError('This legacy ASR record did not preserve whether the rule was configured. Restore it in Windows Security.')
+    runner("set-asr.ps1", {"RuleId": entry["guid"], "Action": entry.get("action") or "off",
+                           'Reset': 'no' if entry['present'] else 'yes'})
 
 
 register_restorer("mppref", _restore_preference)
@@ -116,6 +119,8 @@ def apply(txn, level, ctx):
         raise RuntimeError("no PowerShell runner is available")
 
     status = _current(ctx)
+    if status.get('error') or not status.get('preferences'):
+        raise RuntimeError('Defender preferences could not be read; refusing an unjournalled change.')
     prior_prefs = status.get("preferences") or {}
     prior_asr = _current_asr_actions(status)
 
@@ -123,6 +128,8 @@ def apply(txn, level, ctx):
     # cloud-dependent ASR rules are enabled, or they are configured and inert.
     wanted = preferences_for(level)
     for setting, value in wanted.items():
+        if prior_prefs.get(setting) is None:
+            raise RuntimeError(f'The original {setting} preference could not be read.')
         txn.record("mppref", f"mppref:{setting}", {
             "setting": setting,
             "value": prior_prefs.get(setting),
@@ -142,6 +149,7 @@ def apply(txn, level, ctx):
         txn.record("asr", f"asr:{rule.guid}", {
             "guid": rule.guid,
             "action": prior_asr.get(rule.guid, "off"),
+            "present": rule.guid in prior_asr,
         })
         ctx.runner("set-asr.ps1", {"RuleId": rule.guid, "Action": action})
         applied_rules[rule.guid] = action
@@ -188,7 +196,8 @@ def status(ctx):
         "isTamperProtected": live.get("isTamperProtected"),
         "realtimeProtection": live.get("realtimeProtection"),
         "signatureAgeDays": live.get("signatureAgeDays"),
-        "lastScan": live.get("lastScan"),
+        "lastQuickScan": live.get("lastQuickScan"),
+        "lastFullScan": live.get("lastFullScan"),
         "preferences": live.get("preferences") or {},
         "asrRules": _current_asr_actions(live),
     }

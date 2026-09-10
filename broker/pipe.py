@@ -103,7 +103,7 @@ def build_security_attributes(client_sid):
     descriptor = win32security.SECURITY_DESCRIPTOR()
     descriptor.SetSecurityDescriptorDacl(1, dacl, 0)
 
-    attributes = win32security.SECURITY_ATTRIBUTES()
+    attributes = _types.SECURITY_ATTRIBUTES()
     attributes.SECURITY_DESCRIPTOR = descriptor
     attributes.bInheritHandle = 0
     return attributes
@@ -118,15 +118,15 @@ class PipeServer:  # pragma: no cover - Windows-only
         self.client_sid = validate_sid(client_sid)
         self.name = pipe_name(client_sid)
         self._handle = None
-        self._buffer = b""
+        self._authenticated = False
 
     def create(self):
         win32pipe, _file, _security, _types = _win32()
         attributes = build_security_attributes(self.client_sid)
         self._handle = win32pipe.CreateNamedPipe(
             self.name,
-            win32pipe.PIPE_ACCESS_DUPLEX,
-            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT,
+            win32pipe.PIPE_ACCESS_DUPLEX | 0x00080000 | 0x40000000,
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | 0x8,
             1,                    # one instance: one client, ever
             BUFFER_SIZE, BUFFER_SIZE,
             0,
@@ -136,15 +136,11 @@ class PipeServer:  # pragma: no cover - Windows-only
 
     def wait_for_client(self):
         """Accept one connection and verify it is who we were started for."""
-        win32pipe, _file, win32security, pywintypes = _win32()
-        try:
-            win32pipe.ConnectNamedPipe(self._handle, None)
-        except pywintypes.error as e:
-            # 535 = ERROR_PIPE_CONNECTED: the client beat us to it, which is a
-            # successful connection, not a failure.
-            if e.winerror != 535:
-                raise PipeError(f"couldn't accept a connection: {e}") from e
+        from scanner.ipc import connect
+        connect(self._handle, timeout=60)
 
+    def _authenticate(self):
+        win32pipe, _file, win32security, pywintypes = _win32()
         # The DACL already refused everyone else. This is the second, independent
         # check: ask the OS who is actually on the other end.
         win32pipe.ImpersonateNamedPipeClient(self._handle)
@@ -156,6 +152,7 @@ class PipeServer:  # pragma: no cover - Windows-only
             )
             sid, _attr = win32security.GetTokenInformation(token, win32security.TokenUser)
             actual = win32security.ConvertSidToStringSid(sid)
+            token.Close()
         finally:
             win32security.RevertToSelf()
 
@@ -164,27 +161,22 @@ class PipeServer:  # pragma: no cover - Windows-only
                 f"a process running as {actual} connected to a broker started for "
                 f"{self.client_sid}; refusing to serve it"
             )
-        return actual
+        self._authenticated = True
 
     def read_frame(self):
-        """One newline-delimited frame, or None when the client disconnects."""
-        _pipe, win32file, _security, pywintypes = _win32()
-        while b"\n" not in self._buffer:
-            try:
-                code, chunk = win32file.ReadFile(self._handle, BUFFER_SIZE)
-            except pywintypes.error:
-                return None
-            if not chunk:
-                return None
-            self._buffer += chunk
-            if len(self._buffer) > BUFFER_SIZE * 4:
-                raise PipeError("client sent an oversized frame")
-        line, _sep, self._buffer = self._buffer.partition(b"\n")
+        from scanner.ipc import read_frame
+        try:
+            line = read_frame(self._handle, timeout=900 if self._authenticated else 15)
+        except (OSError, ConnectionError, TimeoutError):
+            return None
+        # Impersonation uses the token of the last message read from the pipe.
+        if not self._authenticated:
+            self._authenticate()
         return line
 
     def write_frame(self, data):
-        _pipe, win32file, _security, _types = _win32()
-        win32file.WriteFile(self._handle, data)
+        from scanner.ipc import write_frame
+        write_frame(self._handle, data)
 
     def close(self):
         if self._handle is None:
@@ -199,3 +191,31 @@ class PipeServer:  # pragma: no cover - Windows-only
         except Exception:  # noqa: BLE001
             pass
         self._handle = None
+
+
+def verify_server_image(handle, expected):
+    """Refuse a pipe impersonator before sending a privileged request.
+
+    The installed helper's requireAdministrator manifest and Program Files ACL
+    protect the executable whose process image is checked here.
+    """
+    import ctypes
+    from ctypes import wintypes
+    import os
+    import win32api
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    pid = wintypes.ULONG()
+    kernel.GetNamedPipeServerProcessId.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.ULONG)]
+    if not kernel.GetNamedPipeServerProcessId(int(handle), ctypes.byref(pid)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    process = win32api.OpenProcess(0x1000, False, pid.value)
+    try:
+        size = wintypes.DWORD(32768)
+        path = ctypes.create_unicode_buffer(size.value)
+        kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        if not kernel.QueryFullProcessImageNameW(int(process), 0, path, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if os.path.normcase(os.path.realpath(path.value)) != os.path.normcase(os.path.realpath(expected)):
+            raise AccessRefused('The named pipe does not belong to the installed privileged helper.')
+    finally:
+        process.Close()

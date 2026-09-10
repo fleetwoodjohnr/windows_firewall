@@ -82,7 +82,11 @@ class Dispatcher:
             return encode_response(request_id, False, error_kind=e.kind, error_message=str(e))
 
         try:
-            result = self.dispatch(request)
+            if is_privileged(request['verb']):
+                with self.context.store.exclusive():
+                    result = self.dispatch(request)
+            else:
+                result = self.dispatch(request)
         except ActionError as e:
             self.context.log(f"{request['verb']} failed: {e}")
             return encode_response(request_id, False, error_kind=e.kind, error_message=str(e))
@@ -100,6 +104,9 @@ class Dispatcher:
 
     def dispatch(self, request):
         verb = request["verb"]
+        refresh = getattr(self.context.probes, 'refresh', None)
+        if refresh:
+            refresh()
 
         if is_privileged(verb):
             refusal = guards.check(request, self.context.probes)
@@ -113,6 +120,22 @@ class Dispatcher:
 
     def _verb_ping(self, _request):
         return {"protocol": PROTOCOL_VERSION, "alive": True}
+
+    def _verb_antivirus_action(self, request):
+        from scanner.client import submit
+        action = request['antivirus_action']
+        if action == 'protect':
+            current = self.context.runner('status-defender.ps1')
+            txn = Transaction(self.context.store, 'antivirus', registry=self.context.registry,
+                              context={'runner': self.context.runner, 'registry': self.context.registry})
+            txn.begin('on')
+            for setting in ('realtimeMonitoring', 'ioavProtection'):
+                value = current.get('preferences', {}).get(setting)
+                if value not in ('True', 'False'):
+                    raise ActionError('The original antivirus protection settings could not be read.')
+                txn.record('mppref', 'mppref:' + setting, {'setting': setting, 'value': value})
+            txn.commit('on')
+        return submit(action, owner_sid=getattr(self.context, 'client_sid', None))
 
     def _verb_status(self, _request):
         """What is applied right now, per family, plus each family's own reading

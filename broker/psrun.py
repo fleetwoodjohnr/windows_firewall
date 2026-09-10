@@ -41,7 +41,7 @@ def run_script(script, params=None, timeout=DEFAULT_TIMEOUT, script_root=None):
         completed = subprocess.run(
             argv,
             capture_output=True,
-            text=True,
+            text=True, encoding='utf-8-sig', errors='replace',
             timeout=timeout,
             check=False,
             # No shell, and an explicit empty stdin so a script that unexpectedly

@@ -58,15 +58,17 @@ class FakeRunner:
                 "controlledFolderAccess": "Disabled",
                 "cloudExtendedTimeout": "0",
             },
-            "mitigations": {"dep": True, "sehop": False, "cfg": False,
-                            "aslr-bottomup": False, "aslr-highentropy": False,
-                            "aslr-force": False},
+            "mitigations": {"dep": "ON", "sehop": "NOTSET", "cfg": "OFF",
+                            "aslr-bottomup": "NOTSET", "aslr-highentropy": "OFF",
+                            "aslr-force": "NOTSET"},
         }
 
     def __call__(self, script, params=None):
         build_argv(script, params, script_root="/ps")  # the real validator
         self.calls.append((script, dict(params or {})))
 
+        if script == "status-system.ps1":
+            return {"value": []}
         if script == "status-defender.ps1":
             return {
                 "isTamperProtected": False,
@@ -109,7 +111,7 @@ def make(tmp_path, probes=None):
 
 def call(dispatcher, **kw):
     _rid, ok, result, kind, message = decode_response(
-        dispatcher.handle_frame({"protocol": 1, "id": "r", **kw}))
+        dispatcher.handle_frame({"protocol": 2, "id": "r", **kw}))
     return ok, result, kind, message
 
 

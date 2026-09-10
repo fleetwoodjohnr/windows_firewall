@@ -61,7 +61,7 @@ class Service:
         if not current.get("exists", False):
             # A service that isn't installed is already in the state we wanted.
             return
-        runner("set-toggle.ps1", {"Toggle": _service_toggle(self.name), "State": state})
+        runner('set-service.ps1', {'ServiceName': self.name, 'StartupType': self.start_type, 'State': state})
 
     @property
     def identity(self):
@@ -126,11 +126,13 @@ def _feature_toggle(name):
 
 def _service_state(runner, name):
     if runner is None:
-        return {"exists": False}
+        raise InvocationError("System state cannot be read without a Windows runner.")
     try:
         payload = runner("status-services.ps1") or {}
-    except Exception:  # noqa: BLE001 - an unreadable probe means "leave it alone"
-        return {"exists": False}
+    except Exception as exc:
+        raise InvocationError(f"Service state is unreadable: {exc}") from exc
+    if (payload.get("serviceErrors") or {}).get(name):
+        raise InvocationError(payload["serviceErrors"][name])
     for entry in payload.get("services") or []:
         if str(entry.get("name", "")).lower() == name.lower():
             return {
@@ -143,11 +145,13 @@ def _service_state(runner, name):
 
 def _feature_state(runner, name):
     if runner is None:
-        return {"exists": False}
+        raise InvocationError("System state cannot be read without a Windows runner.")
     try:
         payload = runner("status-services.ps1") or {}
-    except Exception:  # noqa: BLE001
-        return {"exists": False}
+    except Exception as exc:
+        raise InvocationError(f"Feature state is unreadable: {exc}") from exc
+    if (payload.get("featureErrors") or {}).get(name):
+        raise InvocationError(payload["featureErrors"][name])
     for entry in payload.get("features") or []:
         if str(entry.get("name", "")).lower() == name.lower():
             return {"exists": True, "enabled": bool(entry.get("enabled"))}
@@ -161,8 +165,10 @@ def _restore_service(entry, context):
     if runner is None or not entry.get("exists"):
         return
     # A service that was disabled before we touched it stays disabled.
-    state = "off" if entry.get("startType") == "Disabled" else "on"
-    runner("set-toggle.ps1", {"Toggle": _service_toggle(entry["service"]), "State": state})
+    state = 'on' if entry.get('running') else 'off'
+    if entry.get('startType') not in ('Automatic', 'Manual', 'Disabled', 'AutomaticDelayedStart') or entry.get('running') is None:
+        raise RuntimeError('The original service state was not fully recorded.')
+    runner('set-service.ps1', {'ServiceName': entry['service'], 'StartupType': entry['startType'], 'State': state})
 
 
 def _restore_feature(entry, context):

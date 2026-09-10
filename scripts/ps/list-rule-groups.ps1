@@ -17,6 +17,7 @@ param(
     [string]$Profile
 )
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 try {
     $rules = Get-NetFirewallRule -Direction Inbound -ErrorAction Stop |
@@ -28,6 +29,10 @@ try {
         $enabled = @($g.Group | Where-Object { $_.Enabled -eq 'True' }).Count
         $groups += [ordered]@{
             name    = [string]$g.Name
+            affectedProfiles = @($g.Group | ForEach-Object {
+                if ([string]$_.Profile -eq 'Any') { 'Domain'; 'Private'; 'Public' }
+                else { ([string]$_.Profile -split ',') | ForEach-Object { $_.Trim() } }
+            } | Sort-Object -Unique)
             total   = [int]$g.Count
             enabled = [int]$enabled
             # Three states, not two. "partial" is a real condition and the UI

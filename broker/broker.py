@@ -41,11 +41,12 @@ from broker import pipe as pipe_module  # noqa: E402
 from broker.actions import load_families  # noqa: E402
 from broker.dispatch import Context, Dispatcher  # noqa: E402
 from broker.guards import WindowsProbes  # noqa: E402
-from broker.protocol import ProtocolError, decode_frame, encode_response  # noqa: E402
+from broker.protocol import PROTOCOL_VERSION, ProtocolError, decode_frame, encode_response  # noqa: E402
 from broker.psrun import make_runner  # noqa: E402
 from broker.registry_txn import StateStore, WinRegBackend  # noqa: E402
 
-STATE_DIR = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "win-harden")
+from scanner.paths import program_data
+STATE_DIR = os.path.join(program_data() if os.name == "nt" else r"C:\ProgramData", "win-harden")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 LOG_FILE = os.path.join(STATE_DIR, "broker.log")
 
@@ -132,9 +133,19 @@ def revert_all(log):
     dispatcher = Dispatcher(context)
 
     failures = []
+    from broker.registry_txn import Transaction
+    with context.store.exclusive():
+        if context.store.family('panic').get('claims'):
+            context.runner('set-panic.ps1', {'State': 'off'})
+        for name in list(context.store.all_levels()):
+            if name not in context.families:
+                txn = Transaction(context.store, name, registry=context.registry,
+                                  context={'registry': context.registry, 'runner': context.runner})
+                for entry, error in txn.revert():
+                    failures.append((name, str(error)))
     for family in sorted(context.families):
         frame = dispatcher.handle_frame(
-            {"protocol": 1, "id": f"revert-{family}", "verb": "revert", "family": family})
+            {"protocol": PROTOCOL_VERSION, "id": f"revert-{family}", "verb": "revert", "family": family})
         _rid, ok, result, _kind, message = decode_response(frame)
         if not ok:
             failures.append((family, message))
@@ -159,6 +170,9 @@ def revert_all(log):
 
 
 def main(argv=None):
+    if '--self-test' in (argv if argv is not None else sys.argv):
+        from broker.selftest import check
+        return check()
     parser = argparse.ArgumentParser(prog="win-harden-broker", add_help=True)
     parser.add_argument(
         "--client-sid",
@@ -178,6 +192,8 @@ def main(argv=None):
         if os.name != "nt":
             log("this broker only runs on Windows")
             return 2
+        from scanner.paths import protected_directory
+        protected_directory(STATE_DIR)
         return revert_all(log)
 
     if not args.client_sid:
@@ -193,7 +209,8 @@ def main(argv=None):
         log("this broker only runs on Windows")
         return 2
 
-    os.makedirs(STATE_DIR, exist_ok=True)
+    from scanner.paths import protected_directory
+    protected_directory(STATE_DIR)
     log(f"starting for {args.client_sid}")
 
     server = pipe_module.PipeServer(args.client_sid)
@@ -201,7 +218,9 @@ def main(argv=None):
         server.create()
         server.wait_for_client()
         log("client connected and verified")
-        serve(server, Dispatcher(build_context(log)), log)
+        context = build_context(log)
+        context.client_sid = args.client_sid
+        serve(server, Dispatcher(context), log)
     except pipe_module.AccessRefused as e:
         log(str(e))
         return 3

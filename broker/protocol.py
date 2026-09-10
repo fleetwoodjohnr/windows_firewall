@@ -30,7 +30,7 @@ import re
 # ships inside the same installer as the broker, but a half-finished upgrade or
 # a stale broker still running from a previous session will drift -- and
 # misreading a status payload is a far worse outcome than refusing to talk.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # -- the fixed vocabularies ---------------------------------------------------
 
@@ -77,6 +77,7 @@ VERBS = (
     "set-network-category",
     "set-dns-provider",
     "shutdown",
+    "antivirus-action",
 )
 
 # -- what each verb may carry -------------------------------------------------
@@ -85,6 +86,7 @@ VERBS = (
 # mapping cannot appear in any verb's field list (enforced by _check_tables at
 # import, so the mistake is impossible to ship rather than merely unlikely).
 FIELD_VALUES = {
+    "antivirus_action": ("protect", "remediate"),
     "family": FAMILIES,
     "level": LEVELS,
     "provider": PROVIDERS,
@@ -118,10 +120,11 @@ GUID_FIELDS = ("asr_rule",)
 # group name cannot resemble PowerShell syntax even before it reaches a script
 # that binds it as a parameter rather than interpolating it.
 TEXT_FIELDS = {
-    "group": r"^[A-Za-z0-9 ()/.,+&_'-]{1,128}$",
+    "group": r"^[\w ()/.,+&_'-]{1,128}$",
 }
 
 VERB_FIELDS = {
+    "antivirus-action": ("antivirus_action",),
     "ping": (),
     "status": (),
     "apply": ("family", "level"),
@@ -137,6 +140,7 @@ VERB_FIELDS = {
 # Verbs that change the system. Everything else is a read and runs unprivileged
 # in the GUI process, so opening a page never triggers a UAC prompt.
 PRIVILEGED_VERBS = (
+    "antivirus-action",
     "apply", "revert", "set-asr", "set-toggle", "set-rule-group",
     "set-network-category", "set-dns-provider",
 )

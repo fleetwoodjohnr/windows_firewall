@@ -2,7 +2,7 @@
 
 The Fedora app used an `Adw.ViewSwitcher` across the top, which is the GNOME
 idiom. The Windows idiom for this many pages is the left navigation pane that
-Settings itself uses, so that is what this is -- the same five destinations,
+Settings itself uses, so that is what this is -- six destinations,
 placed where a Windows user looks for them.
 
 Construction order matters and mirrors the original's `_on_firewalld_ready`: the
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from .backend.broker_client import BrokerClient
 from .backend.powershell import PowerShellRunner
+from .backend.scanning import ScanClient
 from .settings import AppSettings
 
 # id, label, and the module:class that builds it. Kept as data so the nav and
@@ -34,20 +35,24 @@ PAGES = (
     ("firewall", "Firewall Rules", "What is allowed in, per profile"),
     ("networks", "Networks", "Public or private, and DNS"),
     ("protection", "Protection", "Defender, ASR and ransomware"),
+    ("virus_scan", "Virus Scan", "Scan files, remove threats and monitor downloads"),
     ("hardening", "Hardening", "Exposure, credentials, DNS, TLS"),
 )
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None, monitor=None):
         super().__init__(parent)
         self.setWindowTitle("Windows Firewall & Hardening")
         self.resize(1040, 760)
         self.setMinimumSize(880, 600)
 
-        self.settings = AppSettings()
+        self.settings = settings or AppSettings()
+        self.monitor = monitor
         self.powershell = PowerShellRunner(self)
         self.broker = BrokerClient(self)
+        self.scanner = ScanClient(self)
+        self.keep_in_tray = False
 
         root = QWidget(self)
         layout = QHBoxLayout(root)
@@ -147,9 +152,17 @@ class MainWindow(QMainWindow):
         leaves an orphaned powershell.exe, and the broker's worker thread keeps
         the process alive with no window to show for it.
         """
+        if self.keep_in_tray:
+            self.hide()
+            event.ignore()
+            return
+        self.shutdown()
+        super().closeEvent(event)
+
+    def shutdown(self):
         self.powershell.shutdown()
         self.broker.shutdown()
-        super().closeEvent(event)
+        self.scanner.shutdown()
 
 
 class _PagePlaceholder(QWidget):

@@ -1,0 +1,19 @@
+{
+  "python": {
+    "version": "3.13.15",
+    "url": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-amd64.exe",
+    "sha256": "edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403",
+    "publisher": "O=Python Software Foundation(?:,|$)"
+  },
+  "inno": {
+    "version": "6.7.3",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+    "sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732",
+    "publisher": "CN=Jordan Russell(?:,|$)"
+  },
+  "sysmon": {
+    "version": "download pinned 2026-09-09",
+    "url": "https://download.sysinternals.com/files/Sysmon.zip",
+    "sha256": "6d48089c7fae14944c82b06767b79ccba3cc26d13218a4227ed28c90f80d0f0e"
+  }
+}
