@@ -8,3 +8,4 @@ installer/Output/
 .venv/
 .pytest_cache/
 .venv-build/
+release-assets/

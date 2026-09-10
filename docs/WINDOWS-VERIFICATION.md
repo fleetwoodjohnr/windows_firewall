@@ -5,10 +5,20 @@ Record Windows edition/build, app version and results. Use a disposable Windows 
 ## Installation and runtime
 
 1. Build with `scripts\bootstrap.ps1` from an elevated Windows PowerShell 5.1 terminal. Confirm download verification, pytest, frozen self-tests and Inno Setup all succeed. A build must stop if a checksum, publisher signature, dependency scan or test fails. Do not bypass a failed scan.
-2. Install on a clean Windows 11 x64 VM without Python or Qt. Decline optional extras for the first run. Confirm all six pages open without import errors or a UAC prompt just to read status. Standard users may see permissions-related gaps in system status; those must be labelled unavailable.
+2. Install on a clean Windows 11 x64 VM without Python or Qt. Decline optional extras for the first run. Confirm all seven pages open without import errors or a UAC prompt just to read status. Standard users may see permissions-related gaps in system status; those must be labelled unavailable.
 3. Run `scripts\verify-windows.ps1 -RunScan` from the installed directory in elevated Windows PowerShell. Review its JSON report on the Desktop. All checks must pass, including a harmless file scanned through the service. Run the app from a different working directory and at 100%, 150% and 200% display scaling.
 4. Sign out and back in. Confirm one monitor in the notification area, opening the app again uses the same instance, and closing the window leaves monitoring active. Exit through the tray and confirm it stops. Confirm another Windows account has separate folders/history.
 5. Check the `WinHardenScanner` service starts automatically as LocalSystem. Check `%ProgramData%\win-harden` permits standard users to read but not modify state; its scanner subdirectory must not allow standard users to read or modify its database. Application files under Program Files must not be writable by standard users.
+
+## Application updates and upgrades
+
+1. Install 1.1.0, save watched folders and preferences, and queue harmless scans. Run the candidate 1.2.0 installer. Confirm settings, histories and the original-settings journal survive and the displayed version and executable ProductVersion agree. Confirm only one installed application and scanner service remain.
+2. On an updater-enabled build, use **Check for updates** against a newer published stable release. Confirm the displayed version and plain-text notes match GitHub, downloading begins only after **Update**, and the UI stays responsive. Confirm background checks run once daily and notify once per version; disabling automatic checks must still allow manual checks.
+3. Cancel during download and disconnect the network during another download. No setup may launch. Verify the application and monitor remain usable. Check the same behaviour for corrupt/missing assets and rate limits using the automated updater tests; never publish intentionally broken production releases to test errors.
+4. Cancel UAC, then cancel the wizard before replacement. The GUI must keep monitoring. Cancel on Preparing to Install after the old service has stopped: setup must restart it. With a security change in flight, the Update action must wait. With another account's tray process open, setup must ask for closure before replacing files. Reopen that account's monitor afterward.
+5. Complete the upgrade with active scans. Confirm interrupted work is reported honestly, the scanner starts, one monitor opens in the initiating account, and the GUI is unelevated even when a different administrator supplied UAC credentials. Do not accept an upgrade that launches the GUI under the administrator's profile.
+6. Run the same installer again to repair it, and verify a subsequently built older-version installer refuses a downgrade. Simulate service startup failure in a disposable VM: setup must report repair instructions and retain state. Confirm no reboot occurs without the user's choice.
+7. Before releasing, confirm an invalid/mismatched tag fails validation and incomplete uploads remain drafts. Verify all public asset digests and ensure no runtime authentication token is present. Keep `windows-build-diagnostics` from any failed build.
 
 ## Scanning and recovery
 

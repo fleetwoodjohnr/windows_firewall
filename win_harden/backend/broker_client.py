@@ -296,6 +296,10 @@ class BrokerClient(QObject):
 
     # -- plumbing -------------------------------------------------------------
 
+    @property
+    def has_pending_changes(self):
+        return bool(self._calls)
+
     def _send(self, verb, callback, **fields):
         from PySide6.QtCore import QTimer  # noqa: PLC0415
 

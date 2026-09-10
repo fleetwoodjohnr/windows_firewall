@@ -11,6 +11,7 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Open Windows PowerShell as Administrator, then run scripts\bootstrap.ps1. Defender scanning and dependency installation require elevation.'
 }
+Write-Host 'Checking Microsoft Defender before downloading build dependencies...'
 Assert-DefenderReady
 try { Update-MpSignature -ErrorAction Stop } catch { Write-Warning "Definition update failed; using installed definitions: $_" }
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'downloads.json') -Raw | ConvertFrom-Json
@@ -20,6 +21,7 @@ Initialize-PrivateDirectory -Path $work
 $pythonHome = Join-Path $work 'Python313'
 $basePython = Join-Path $pythonHome 'python.exe'
 if (-not (Test-Path -LiteralPath $basePython)) {
+    Write-Host 'Downloading and verifying the pinned Python installer...'
     $installer = Get-VerifiedDownload -Package $manifest.python -Destination (Join-Path $work 'python-setup.exe')
     $process = Start-Process -FilePath $installer -ArgumentList @('/quiet','InstallAllUsers=1',"TargetDir=`"$pythonHome`"",'Include_launcher=0','Include_test=0','PrependPath=0','Include_pip=1') -Wait -PassThru
     if ($process.ExitCode -notin @(0,3010)) { throw "Python setup failed: $($process.ExitCode)" }
@@ -29,6 +31,7 @@ $venv = Join-Path $repo '.venv-build'
 if (-not (Test-Path -LiteralPath (Join-Path $venv 'Scripts\python.exe'))) { Invoke-CheckedNative $basePython @('-m','venv',$venv) }
 $python = Join-Path $venv 'Scripts\python.exe'
 Invoke-CheckedNative $python @('-c', "import sys; assert sys.version_info[:3] == (3,13,15), 'Remove .venv-build and rerun bootstrap with the pinned Python'")
+Write-Host 'Downloading and verifying pinned dependency wheels...'
 $wheels = Join-Path $work 'wheels'
 New-Item -ItemType Directory -Path $wheels -Force | Out-Null
 $lock = Join-Path $repo 'requirements-win.lock'
@@ -40,6 +43,7 @@ Invoke-CheckedNative $python @('-m','pip','check')
 
 $iscc = Join-Path $work 'InnoSetup\ISCC.exe'
 if (-not $SkipInstaller -and -not (Test-Path -LiteralPath $iscc)) {
+    Write-Host 'Downloading and verifying the pinned Inno Setup installer...'
     $installer = Get-VerifiedDownload -Package $manifest.inno -Destination (Join-Path $work 'inno-setup.exe')
     $target = Split-Path -Parent $iscc
     $process = Start-Process $installer -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/ALLUSERS',"/DIR=`"$target`"") -Wait -PassThru
@@ -48,8 +52,10 @@ if (-not $SkipInstaller -and -not (Test-Path -LiteralPath $iscc)) {
 Push-Location $repo
 try {
     if (-not $SkipTests) {
+        Write-Host 'Running application tests...'
         & $python -m pytest tests -q
         if ($LASTEXITCODE -ne 0) { throw 'Tests failed. Not building an installer from a failing tree.' }
     }
+    Write-Host 'Building and verifying the frozen application and installer...'
     & (Join-Path $PSScriptRoot 'build.ps1') -Python $python -Iscc $iscc -SkipInstaller:$SkipInstaller
 } finally { Pop-Location }

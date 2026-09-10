@@ -32,6 +32,10 @@ class AppSettings:
         "confirm_strict": True,
         "watch_folders": [],
         "downloads_initialized": False,
+        "check_updates_automatically": True,
+        "updates_last_attempt": 0,
+        "updates_last_checked": 0,
+        "updates_notified_version": "",
     }
 
     def __init__(self, path=None):

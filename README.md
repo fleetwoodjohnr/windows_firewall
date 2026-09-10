@@ -2,7 +2,7 @@
 
 A Windows counterpart of [firewall-gui for Fedora](https://github.com/fleetwoodjohnr/fedora_firewall_gui), using Windows Firewall and Microsoft Defender. Targets **Windows 11, Intel/AMD x64**. ARM64 is not supported by this installer.
 
-The six pages are Dashboard, Firewall Rules, Networks, Protection, Hardening, and **Virus Scan**. The GUI runs without administrator rights. Security changes use a separate helper through UAC; long antivirus operations run in a Windows service.
+The pages are Dashboard, Firewall Rules, Networks, Protection, Hardening, **Virus Scan**, and **Updates**. The GUI runs without administrator rights. Security changes use a separate helper through UAC; long antivirus operations run in a Windows service.
 
 ## Build and install
 
@@ -17,8 +17,8 @@ The bootstrap automatically downloads the pinned Python runtime, Qt, pywin32, Py
 The build runs tests and checks the three frozen executables outside the source directory, then produces:
 
 ```text
-installer\Output\WinHardenSetup-1.1.0.exe
-installer\Output\WinHardenSetup-1.1.0.exe.sha256
+installer\Output\WinHardenSetup-1.2.0.exe
+installer\Output\WinHardenSetup-1.2.0.exe.sha256
 ```
 
 Run that installer on the target PC. **Python, Qt and pywin32 are bundled:** the installed application does not need a separate Python installation, pip, winget, or a developer environment. Windows 11 supplies PowerShell, Windows Firewall and Defender. The installer installs the scan service and a sign-in shortcut for the tray monitor. Optional Sysmon and definition updates require internet access; Sysmon downloads are hash-checked, signature-checked and scanned. The optional baseline item opens Microsoft's download page for manual review.
@@ -33,15 +33,46 @@ What stays per-account is preference only: watched download folders, the selecte
 
 ### Getting a built installer without building it
 
-The `Windows package` workflow builds the installer on every push and uploads `WinHardenSetup-1.1.0.exe` with its `.sha256` as the `win-harden-windows-x64` artifact. Download it from the workflow run, then confirm the hash on the target PC before running it:
+Download the installer and its `.sha256` file from [GitHub Releases](https://github.com/fleetwoodjohnr/windows_firewall/releases). Run the `.exe` and follow the wizard; it installs the application and its dependencies for every account on the PC.
+
+Development builds are also available from successful [Windows package workflow runs](https://github.com/fleetwoodjohnr/windows_firewall/actions/workflows/windows.yml), in the `win-harden-windows-x64` artifact. A failed workflow does not produce an installer. Download `windows-build-diagnostics` from that run for the build transcript and syntax report.
+
+Confirm the hash on the target PC before running a manually downloaded installer:
 
 ```powershell
-Get-FileHash .\WinHardenSetup-1.1.0.exe -Algorithm SHA256
+Get-FileHash .\WinHardenSetup-1.2.0.exe -Algorithm SHA256
 ```
 
 Windows Server CI builds the package; it does not establish Windows 11 acceptance. Run the checklist below on the target laptop.
 
-Pinned build inputs are in `requirements-win.lock` and `scripts/downloads.json`. Upstream changes, including changes to the vendor's unversioned Sysmon archive, fail verification until the manifest is reviewed and updated. Build staging is under `%ProgramData%\win-harden-build`. This repository does not include a prebuilt or code-signed installer; a locally built installer can show an unknown-publisher prompt.
+Pinned build inputs are in `requirements-win.lock` and `scripts/downloads.json`. Upstream changes, including changes to the vendor's unversioned Sysmon archive, fail verification until the manifest is reviewed and updated. Build staging is under `%ProgramData%\win-harden-build`. Installers are unsigned and can show an unknown-publisher prompt. SHA-256 checks establish integrity against the release assets, not a code-signing identity.
+
+## Application updates
+
+Open **Updates** or select **Check for application updates** in the tray menu. The installed app checks after startup when due and once every 24 hours while running. It notifies you once per available version. Turn off automatic checks on the Updates page if you prefer to check manually.
+
+Click **Update** to download the complete installer. The app checks its size and SHA-256 checksum before opening the upgrade wizard. Downloading does not require administrator rights; installing does. The GUI stays running until setup asks to close it, so cancelling administrator approval or leaving the wizard before installation keeps monitoring available. No source checkout, Git account, Python installation, or subscription is needed on the target PC.
+
+During an upgrade, the scanner service stops, the application files are replaced, and the service starts again. Preferences, watched folders, history, queued scan records, and the original-settings journal are retained. Active scans may be interrupted and reported incomplete. Wait for security changes to finish before upgrading. Close the app and **Exit monitor** in other signed-in accounts when setup requests it, then reopen their monitors afterward. Cancelling setup before replacement restarts the old service; failures during installation require rerunning the same installer to repair it. Same-version repair is supported; newer installers refuse downgrades.
+
+Downloads are staged under `%LocalAppData%\win-harden\updates`. Invalid and cancelled downloads are removed. A launched installer may remain cached until uninstall and can be removed after setup finishes. Offline checks, GitHub rate limits, missing assets and corrupt downloads produce a message on the Updates page. They do not replace application files. Development checkouts can check releases but cannot install updates.
+
+Version 1.2.0 introduces the updater. Users of 1.1.0 must install the first updater-enabled version manually; subsequent releases can be installed through the app. Defender definition updates remain a separate action on **Virus Scan**.
+
+### Publishing a new version
+
+1. Change `VERSION` in `win_harden/version.py` to the next `major.minor.patch` version. The GUI, all three executables, installer filename and Windows version metadata use that value.
+2. Commit and push the code to `main`. Confirm the Windows package job passes and verify its candidate installer on Windows 11 using [the acceptance checklist](docs/WINDOWS-VERIFICATION.md).
+3. Tag that exact verified commit and push the tag. For the first release:
+
+   ```bash
+   git tag v1.2.0 <verified-commit-sha>
+   git push origin v1.2.0
+   ```
+
+The tag workflow checks the version, builds and tests the installer, then creates a draft GitHub Release. It uploads the installer, checksum and dependency inventory, verifies their sizes and GitHub SHA-256 digests, and publishes the complete release as latest. Build and upload failures leave no public update. Resolve the failure and rerun a draft release's workflow; an already-published release must be followed by a new version. Branch pushes and pull requests only create build artifacts.
+
+The publishing job uses GitHub's built-in workflow token with `contents: write`; no token is included in the installed application. Repository or organization policy must allow that job to write releases. Installer compilation requires Windows; it cannot be produced by running the Python build on Linux.
 
 ## Virus scans and downloads
 

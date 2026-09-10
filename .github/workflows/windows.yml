@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
 permissions:
   contents: read
@@ -13,24 +14,71 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: powershell
+        run: python scripts/release.py --validate-tag
       - name: Parse scripts with Windows PowerShell 5.1
         shell: powershell
         run: .\scripts\verify-windows.ps1 -SyntaxOnly -Report "$env:RUNNER_TEMP\powershell-syntax.json"
       - name: Verify dependencies, test and build installer
         shell: powershell
-        run: .\scripts\bootstrap.ps1
+        run: |
+          Start-Transcript -Path "$env:RUNNER_TEMP\package-build.log"
+          try {
+            .\scripts\bootstrap.ps1
+          } finally {
+            Stop-Transcript
+          }
+      - name: Stage release assets
+        shell: powershell
+        run: |
+          $version = (& .\.venv-build\Scripts\python.exe win_harden\version.py).Trim()
+          if ($LASTEXITCODE) { throw 'Could not read the built version.' }
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Copy-Item -LiteralPath "installer\Output\WinHardenSetup-$version.exe" -Destination release-assets
+          Copy-Item -LiteralPath "installer\Output\WinHardenSetup-$version.exe.sha256" -Destination release-assets
+          Copy-Item -LiteralPath dist\win-harden\dependencies.json -Destination release-assets
+      - name: Install, repair and uninstall the candidate
+        shell: powershell
+        run: |
+          $setup = Get-ChildItem -LiteralPath release-assets -Filter '*.exe'
+          if (@($setup).Count -ne 1) { throw 'Expected one candidate installer.' }
+          .\scripts\verify-installer.ps1 -Installer $setup.FullName
       - name: Upload installer and dependency inventory
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: win-harden-windows-x64
-          path: |
-            installer/Output/WinHardenSetup-1.1.0.exe
-            installer/Output/WinHardenSetup-1.1.0.exe.sha256
-            dist/win-harden/dependencies.json
-      - name: Upload syntax report
+          path: release-assets/*
+          if-no-files-found: error
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: powershell-syntax
-          path: ${{ runner.temp }}/powershell-syntax.json
+          name: windows-build-diagnostics
+          path: |
+            ${{ runner.temp }}/powershell-syntax.json
+            ${{ runner.temp }}/package-build.log
+            ${{ runner.temp }}/installer-checks/*.log
+            build/**/warn-*.txt
+          if-no-files-found: warn
+  release:
+    needs: package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'fleetwoodjohnr/windows_firewall'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-win-harden
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-harden-windows-x64
+          path: release-assets
+      - name: Publish verified installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release.py --artifacts release-assets

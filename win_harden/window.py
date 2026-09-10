@@ -37,11 +37,12 @@ PAGES = (
     ("protection", "Protection", "Defender, ASR and ransomware"),
     ("virus_scan", "Virus Scan", "Scan files, remove threats and monitor downloads"),
     ("hardening", "Hardening", "Exposure, credentials, DNS, TLS"),
+    ("updates", "Updates", "Application versions and updates"),
 )
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, parent=None, settings=None, monitor=None):
+    def __init__(self, parent=None, settings=None, monitor=None, updater=None):
         super().__init__(parent)
         self.setWindowTitle("Windows Firewall & Hardening")
         self.resize(1040, 760)
@@ -52,6 +53,11 @@ class MainWindow(QMainWindow):
         self.powershell = PowerShellRunner(self)
         self.broker = BrokerClient(self)
         self.scanner = ScanClient(self)
+        self._owns_updater = updater is None
+        if updater is None:
+            from .backend.updates import UpdateManager
+            updater = UpdateManager(self.settings, self, busy=lambda: self.broker.has_pending_changes)
+        self.updater = updater
         self.keep_in_tray = False
 
         root = QWidget(self)
@@ -160,6 +166,8 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def shutdown(self):
+        if self._owns_updater:
+            self.updater.shutdown()
         self.powershell.shutdown()
         self.broker.shutdown()
         self.scanner.shutdown()

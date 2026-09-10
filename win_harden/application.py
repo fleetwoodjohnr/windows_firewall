@@ -15,6 +15,7 @@ import re
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QStyle
+from .version import VERSION
 
 APP_NAME = "Windows Firewall & Hardening"
 ORG_NAME = "win-harden"
@@ -78,16 +79,23 @@ class WinHardenApplication(QApplication):
         self.setApplicationName(APP_NAME)
         self.setOrganizationName(ORG_NAME)
         self.setApplicationDisplayName(APP_NAME)
+        self.setApplicationVersion(VERSION)
         self._window = None
         self.monitor = None
         self.tray = None
         self._server = None
+        self.updater = None
         self.is_primary = self._single_instance('--background' not in argv)
         if not self.is_primary:
             return
         from .settings import AppSettings, config_dir
         from .downloads import DownloadMonitor
         self.settings = AppSettings()
+        from .backend.updates import UpdateManager
+        self.updater = UpdateManager(self.settings, self,
+            busy=lambda: bool(self._window and self._window.broker.has_pending_changes))
+        self.updater.available.connect(lambda version: self.notification.emit(
+            "Application update available", f"Version {version} is ready. Open Updates to install it."))
         if os.name == 'nt':
             from scanner.paths import downloads_folder
             if not self.settings.downloads_initialized:
@@ -101,6 +109,7 @@ class WinHardenApplication(QApplication):
         if os.name == 'nt':
             self.monitor.start()
         self.aboutToQuit.connect(self.shutdown)
+        self.commitDataRequest.connect(self._prepare_session_shutdown)
         self.apply_theme()
 
         hints = self.styleHints()
@@ -148,6 +157,7 @@ class WinHardenApplication(QApplication):
             self.tray.setToolTip(APP_NAME + ' — download monitoring')
             menu = QMenu()
             menu.addAction('Open', self.show_window)
+            menu.addAction('Check for application updates', self.show_updates)
             pause = menu.addAction('Pause additional download scans')
             pause.setCheckable(True)
             pause.toggled.connect(lambda checked: setattr(self.monitor, 'paused', checked))
@@ -160,6 +170,24 @@ class WinHardenApplication(QApplication):
             self._window.keep_in_tray = True
         elif background:
             self.show_window()
+        self.updater.start()
+
+    def show_updates(self):
+        window = self.show_window()
+        from .window import PAGES
+        window.nav.setCurrentRow(next(i for i, page in enumerate(PAGES) if page[0] == 'updates'))
+        self.updater.check()
+
+    def _prepare_session_shutdown(self, session):
+        # Restart Manager uses session shutdown messages. A tray close alone
+        # would leave the runtime locked. Do not interrupt a registry mutation.
+        if self._window and self._window.broker.has_pending_changes:
+            session.cancel()
+            return
+        if self._window:
+            self._window.keep_in_tray = False
+        self.shutdown()
+        self.quit()
 
     def apply_theme(self):
         self.setStyleSheet(load_stylesheet(dark=prefers_dark()))
@@ -168,7 +196,7 @@ class WinHardenApplication(QApplication):
         from .window import MainWindow  # noqa: PLC0415 - avoids an import cycle
 
         if self._window is None:
-            self._window = MainWindow(settings=self.settings, monitor=self.monitor)
+            self._window = MainWindow(settings=self.settings, monitor=self.monitor, updater=self.updater)
         if not hidden:
             self._window.showNormal()
             self._window.raise_()
@@ -176,6 +204,8 @@ class WinHardenApplication(QApplication):
         return self._window
 
     def shutdown(self):
+        if self.updater:
+            self.updater.shutdown()
         if self.monitor:
             self.monitor.stop()
         if self._window:

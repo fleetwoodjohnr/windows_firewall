@@ -2,6 +2,7 @@
 # each other's DLLs. GUI-only modules are excluded from privileged executables.
 from pathlib import Path
 root = Path(SPECPATH).parent
+version_file = root / 'build' / 'version-info.txt'
 common = [(str(root / 'scripts' / 'ps'), 'scripts/ps'),
           (str(root / 'scanner' / 'ps'), 'scanner/ps')]
 hidden = ['win32timezone', 'win32api', 'win32security', 'win32pipe', 'win32file',
@@ -10,7 +11,7 @@ gui = Analysis([str(root / 'win-harden.py')], pathex=[str(root)],
     datas=common + [(str(root / 'win_harden' / 'style.qss'), 'win_harden')],
     hiddenimports=hidden + ['broker.actions.' + p for p in
         ('defender','exploit','exposure','credential','dns','tls','system_state')] + ['win_harden.pages.' + p for p in
-        ('dashboard','firewall','networks','protection','hardening','virus_scan')],
+        ('dashboard','firewall','networks','protection','hardening','virus_scan','updates')],
     excludes=[])
 broker = Analysis([str(root / 'win-harden-broker.py')], pathex=[str(root)], datas=common,
     hiddenimports=hidden + ['broker.actions.' + p for p in
@@ -19,10 +20,10 @@ service = Analysis([str(root / 'win-harden-scanner.py')], pathex=[str(root)], da
     hiddenimports=hidden + ['broker.actions.' + p for p in
         ('defender','exploit','exposure','credential','dns','tls','system_state')], excludes=['PySide6'])
 app_exe = EXE(PYZ(gui.pure), gui.scripts, [], exclude_binaries=True, name='win-harden',
-    console=False, icon=str(root / 'build' / 'win-harden.ico'), manifest=str(root / 'installer' / 'app.manifest'))
+    console=False, version=str(version_file), icon=str(root / 'build' / 'win-harden.ico'), manifest=str(root / 'installer' / 'app.manifest'))
 broker_exe = EXE(PYZ(broker.pure), broker.scripts, [], exclude_binaries=True, name='win-harden-broker',
-    console=True, manifest=str(root / 'installer' / 'broker.manifest'))
+    console=True, version=str(version_file), manifest=str(root / 'installer' / 'broker.manifest'))
 service_exe = EXE(PYZ(service.pure), service.scripts, [], exclude_binaries=True, name='win-harden-scanner',
-    console=True, manifest=str(root / 'installer' / 'app.manifest'))
+    console=True, version=str(version_file), manifest=str(root / 'installer' / 'app.manifest'))
 coll = COLLECT(app_exe, broker_exe, service_exe, gui.binaries, gui.datas,
     broker.binaries, broker.datas, service.binaries, service.datas, name='win-harden')

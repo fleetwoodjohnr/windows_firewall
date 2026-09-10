@@ -1,9 +1,13 @@
 #define AppName "Windows Firewall & Hardening"
-#define AppVersion "1.1.0"
+#ifndef AppVersion
+  #error AppVersion must be supplied by scripts\build.ps1
+#endif
 [Setup]
 AppId={{7C4A1E62-9B3D-4F58-8E21-6D0F5A9C2B14}
 AppName={#AppName}
 AppVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}.0
+AppUpdatesURL=https://github.com/fleetwoodjohnr/windows_firewall/releases
 AppPublisher=jrf
 DefaultDirName={autopf}\win-harden
 DefaultGroupName={#AppName}
@@ -20,8 +24,11 @@ UninstallDisplayIcon={app}\win-harden.exe
 SetupIconFile=..\build\win-harden.ico
 LicenseFile=..\LICENSE
 DisableProgramGroupPage=yes
-CloseApplications=force
+CloseApplications=yes
 RestartApplications=no
+SetupMutex=WinHardenSetup,Global\WinHardenSetup
+SetupLogging=yes
+UsePreviousTasks=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -64,6 +71,33 @@ Type: dirifempty; Name: "{app}"
 // is why uninstall has to walk the profile list rather than just its own.
 const
   PROFILE_LIST = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList';
+  UNINSTALL_KEY = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{7C4A1E62-9B3D-4F58-8E21-6D0F5A9C2B14}_is1';
+
+var
+  ScannerStopped: Boolean;
+  ReplacementStarted: Boolean;
+  ScannerReady: Boolean;
+
+function InitializeSetup(): Boolean;
+var
+  Installed: String;
+  OldVersion, NewVersion: Int64;
+begin
+  Result := True;
+  if RegQueryStringValue(HKLM64, UNINSTALL_KEY, 'DisplayVersion', Installed) then
+  begin
+    if not StrToVersion(Installed, OldVersion) or not StrToVersion('{#AppVersion}', NewVersion) then
+    begin
+      MsgBox('The installed version could not be read. Repair with the current installer before changing versions.', mbError, MB_OK);
+      Result := False;
+    end
+    else if ComparePackedVersion(OldVersion, NewVersion) > 0 then
+    begin
+      MsgBox('A newer version (' + Installed + ') is already installed. Download the latest installer from GitHub Releases.', mbError, MB_OK);
+      Result := False;
+    end;
+  end;
+end;
 
 function RunHelper(const Name, Args: String): Boolean;
 var Code: Integer;
@@ -76,8 +110,22 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if FileExists(ExpandConstant('{app}\win-harden-scanner.exe')) then
+  begin
     if not RunHelper('win-harden-scanner.exe', '--stop') then
-      Result := 'The scan service could not stop. Restart Windows and retry setup.';
+      Result := 'The scan service could not stop. Restart Windows and retry setup.'
+    else
+      ScannerStopped := True;
+  end;
+end;
+
+procedure DeinitializeSetup();
+begin
+  // Preparing to Install runs before Restart Manager asks to close other apps.
+  if ScannerStopped and not ScannerReady and not ReplacementStarted then
+    if not RunHelper('win-harden-scanner.exe', '--install') then
+      MsgBox('Setup was cancelled, but the scan service could not restart. Run setup again to repair it. Your settings and scan history have been kept.', mbError, MB_OK);
+  if ReplacementStarted and not ScannerReady then
+    MsgBox('Installation did not complete. Run this installer again to repair the application and scan service. Your settings and scan history have been kept.', mbError, MB_OK);
 end;
 
 procedure RunExtra(const TaskName, Flag: String);
@@ -92,10 +140,13 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then
+    ReplacementStarted := True;
   if CurStep = ssPostInstall then
   begin
     if not RunHelper('win-harden-scanner.exe', '--install') then
       RaiseException('The scan service could not be installed or started. Run setup again to repair it.');
+    ScannerReady := True;
     RunExtra('extras-defender', '-DefenderSignatures');
     RunExtra('extras-sysmon', '-Sysmon');
   end;
@@ -110,6 +161,10 @@ begin
     Space + 'Shortcuts and the sign-in download monitor are created for every account,' + NewLine +
     Space + 'and firewall, Defender and hardening changes apply to the whole machine.' + NewLine +
     Space + 'Applying a change always needs Administrator approval (UAC).' + NewLine;
+  Result := Result + NewLine + 'Upgrading:' + NewLine +
+    Space + 'Existing settings, watched folders and scan history are kept.' + NewLine +
+    Space + 'Close the app and Exit monitor in other signed-in accounts when prompted.' + NewLine +
+    Space + 'Reopen the monitor in those accounts after installation.' + NewLine;
   if MemoTasksInfo <> '' then
     Result := Result + NewLine + MemoTasksInfo + NewLine;
 end;
@@ -132,6 +187,8 @@ begin
     // reported. Never a path assembled from anything the uninstaller was told.
     if (Profile <> '') and DirExists(Profile + '\AppData\Roaming\win-harden') then
       DelTree(Profile + '\AppData\Roaming\win-harden', True, True, True);
+    if (Profile <> '') and DirExists(Profile + '\AppData\Local\win-harden\updates') then
+      DelTree(Profile + '\AppData\Local\win-harden\updates', True, True, True);
   end;
 end;
 
