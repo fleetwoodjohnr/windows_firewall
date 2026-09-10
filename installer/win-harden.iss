@@ -56,6 +56,15 @@ Filename: "{app}\win-harden.exe"; Description: "Open {#AppName}"; Flags: nowait 
 Type: dirifempty; Name: "{app}"
 
 [Code]
+// This is a machine-wide install, and deliberately so: the laptop it targets has
+// more than one account. The program lives in Program Files, its shortcuts and
+// the sign-in download monitor are created for every account, and every change
+// the broker makes is machine-wide (HKLM, Windows Firewall, Defender, services).
+// The only per-account state is each user's own preferences under AppData, which
+// is why uninstall has to walk the profile list rather than just its own.
+const
+  PROFILE_LIST = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList';
+
 function RunHelper(const Name, Args: String): Boolean;
 var Code: Integer;
 begin
@@ -90,6 +99,46 @@ begin
     RunExtra('extras-defender', '-DefenderSignatures');
     RunExtra('extras-sysmon', '-Sysmon');
   end;
+end;
+
+function UpdateReadyMemo(const Space, NewLine, MemoUserInfoInfo, MemoDirInfo, MemoTypeInfo,
+  MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := MemoDirInfo + NewLine + NewLine +
+    'Accounts:' + NewLine +
+    Space + 'All user accounts on this PC.' + NewLine +
+    Space + 'Shortcuts and the sign-in download monitor are created for every account,' + NewLine +
+    Space + 'and firewall, Defender and hardening changes apply to the whole machine.' + NewLine +
+    Space + 'Applying a change always needs Administrator approval (UAC).' + NewLine;
+  if MemoTasksInfo <> '' then
+    Result := Result + NewLine + MemoTasksInfo + NewLine;
+end;
+
+// Preferences only. System state was already restored by --revert-all above.
+procedure RemovePerUserData();
+var
+  Accounts: TArrayOfString;
+  I: Integer;
+  Profile: String;
+begin
+  if not RegGetSubkeyNames(HKEY_LOCAL_MACHINE, PROFILE_LIST, Accounts) then
+    Exit;
+  for I := 0 to GetArrayLength(Accounts) - 1 do
+  begin
+    if not RegQueryStringValue(HKEY_LOCAL_MACHINE, PROFILE_LIST + '\' + Accounts[I],
+      'ProfileImagePath', Profile) then
+      Continue;
+    // Only ever this one folder name, and only under a profile Windows itself
+    // reported. Never a path assembled from anything the uninstaller was told.
+    if (Profile <> '') and DirExists(Profile + '\AppData\Roaming\win-harden') then
+      DelTree(Profile + '\AppData\Roaming\win-harden', True, True, True);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usPostUninstall then
+    RemovePerUserData();
 end;
 
 function InitializeUninstall(): Boolean;

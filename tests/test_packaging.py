@@ -175,6 +175,43 @@ class TestInstaller:
             assert (ROOT / path).exists(), f"the installer references a missing file: {path}"
 
 
+
+class TestAllUsersInstall:
+    """The machine this ships to has two accounts, and an all-users install is
+    not one decision but several: the install root, each shortcut, the sign-in
+    entry. Any one of them can be changed to a {user...} constant later and turn
+    the whole thing into a one-account install that still looks correct on the
+    machine it was installed from."""
+
+    def test_installs_machine_wide(self):
+        """These two directives are what make every {auto...} constant below
+        resolve to the common area rather than the installing user's."""
+        assert "PrivilegesRequired=admin" in ISS
+        assert "DefaultDirName={autopf}" in ISS
+
+    @pytest.mark.parametrize("constant", ["{userdesktop}", "{userstartup}",
+                                          "{userprograms}", "{userappdata}"])
+    def test_no_shortcut_lands_in_one_users_profile(self, constant):
+        assert constant not in ISS, (
+            f"{constant} installs for the account running setup only; the "
+            f"common equivalent covers every account")
+
+    def test_the_download_monitor_starts_for_every_account(self):
+        assert "{commonstartup}" in ISS
+
+    def test_uninstall_clears_preferences_from_every_profile(self):
+        """Per-account preferences are the one thing not under {app}, so
+        removing them means walking the profile list rather than trusting
+        whichever account happens to be uninstalling."""
+        assert "RemovePerUserData" in ISS
+        assert "ProfileImagePath" in ISS
+        assert "usPostUninstall" in ISS
+
+    def test_the_wizard_says_who_it_installs_for(self):
+        assert "UpdateReadyMemo" in ISS
+        assert "All user accounts" in ISS
+
+
 class TestExtras:
     def test_only_downloads_from_fixed_vendor_urls(self):
         urls = re.findall(r"https://[^\s'\"]+", EXTRAS)

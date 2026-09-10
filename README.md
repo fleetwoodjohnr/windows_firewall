@@ -23,6 +23,24 @@ installer\Output\WinHardenSetup-1.1.0.exe.sha256
 
 Run that installer on the target PC. **Python, Qt and pywin32 are bundled:** the installed application does not need a separate Python installation, pip, winget, or a developer environment. Windows 11 supplies PowerShell, Windows Firewall and Defender. The installer installs the scan service and a sign-in shortcut for the tray monitor. Optional Sysmon and definition updates require internet access; Sysmon downloads are hash-checked, signature-checked and scanned. The optional baseline item opens Microsoft's download page for manual review.
 
+### Two user accounts
+
+The install is machine-wide. It goes to `C:\Program Files\win-harden`, and the Start Menu entry, the optional desktop shortcut and the sign-in shortcut for the tray monitor are created for **every** account on the PC, not only the one that ran setup. The wizard states this on its Ready to Install page.
+
+The settings the app applies were never per-account: hardening families write machine-wide registry values under `HKLM`, and firewall profiles, Defender configuration and services are machine state. A change applied from one account is therefore already in force for the other, and the second account's Dashboard reads the same state rather than a separate copy of it. Applying a change always needs Administrator approval; a standard account is asked for an administrator password rather than a simple confirmation.
+
+What stays per-account is preference only: watched download folders, the selected page, and that account's own download history, under `%AppData%\win-harden`. Each account runs its own tray monitor over its own Downloads folder, and the two can run the app at the same time. Uninstall removes that folder from every profile after restoring system settings.
+
+### Getting a built installer without building it
+
+The `Windows package` workflow builds the installer on every push and uploads `WinHardenSetup-1.1.0.exe` with its `.sha256` as the `win-harden-windows-x64` artifact. Download it from the workflow run, then confirm the hash on the target PC before running it:
+
+```powershell
+Get-FileHash .\WinHardenSetup-1.1.0.exe -Algorithm SHA256
+```
+
+Windows Server CI builds the package; it does not establish Windows 11 acceptance. Run the checklist below on the target laptop.
+
 Pinned build inputs are in `requirements-win.lock` and `scripts/downloads.json`. Upstream changes, including changes to the vendor's unversioned Sysmon archive, fail verification until the manifest is reviewed and updated. Build staging is under `%ProgramData%\win-harden-build`. This repository does not include a prebuilt or code-signed installer; a locally built installer can show an unknown-publisher prompt.
 
 ## Virus scans and downloads
