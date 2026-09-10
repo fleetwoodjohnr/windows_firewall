@@ -68,7 +68,10 @@ def make_logger(path):
                 f.write(line)
         except OSError:
             pass
-        sys.stderr.write(line)
+        # Windowed PyInstaller executables deliberately have no stderr stream.
+        # The protected file remains the authoritative diagnostic record.
+        if sys.stderr is not None:
+            sys.stderr.write(line)
 
     return log
 
@@ -158,12 +161,13 @@ def revert_all(log):
             log(f"revert {family}: done")
 
     if failures:
-        sys.stderr.write(
-            "Some settings could not be put back:\n"
-            + "".join(f"  {family}: {message}\n" for family, message in failures)
-            + f"\nThey are still recorded in {STATE_FILE}, so reinstalling and reverting "
-              f"again will retry them.\n"
-        )
+        if sys.stderr is not None:
+            sys.stderr.write(
+                "Some settings could not be put back:\n"
+                + "".join(f"  {family}: {message}\n" for family, message in failures)
+                + f"\nThey are still recorded in {STATE_FILE}, so reinstalling and reverting "
+                  f"again will retry them.\n"
+            )
         return 4
     log("revert-all complete")
     return 0
@@ -228,7 +232,8 @@ def main(argv=None):
         import traceback
 
         log(f"fatal: {traceback.format_exc()}")
-        sys.stderr.write(f"{e}\n")
+        if sys.stderr is not None:
+            sys.stderr.write(f"{e}\n")
         return 1
     finally:
         server.close()

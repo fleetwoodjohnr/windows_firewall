@@ -11,6 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
+RELEASE_NOTES = ROOT / 'release-notes'
 sys.path.insert(0, str(ROOT))
 from win_harden.version import VERSION
 from win_harden.updates import REPOSITORY, parse_checksum, parse_release, version_tuple
@@ -20,6 +21,22 @@ def validate_tag(tag):
     version_tuple(VERSION)
     if tag != 'v' + VERSION:
         raise ValueError(f'Tag {tag!r} must equal v{VERSION}. Update win_harden/version.py before tagging.')
+
+
+def release_body(version):
+    """Load notes tied to this version so a later release cannot reuse stale copy."""
+    path = RELEASE_NOTES / f'{version}.md'
+    try:
+        display = path.relative_to(ROOT)
+    except ValueError:
+        display = path
+    try:
+        body = path.read_text(encoding='utf-8').strip()
+    except OSError as exc:
+        raise ValueError(f'Missing release notes: {display}') from exc
+    if not body:
+        raise ValueError(f'Release notes are empty: {display}')
+    return body
 
 
 def validate_artifacts(folder, tag):
@@ -66,6 +83,7 @@ def api(path, method='GET', body=None):
 
 def publish(folder, tag):
     files, checksum = validate_artifacts(folder, tag)
+    notes = release_body(VERSION)
     if os.environ.get('GITHUB_REPOSITORY') != REPOSITORY:
         raise ValueError('Release publishing is restricted to the official repository.')
     api('/git/ref/tags/' + tag)
@@ -83,13 +101,18 @@ def publish(folder, tag):
     if release is None:
         release = api('/releases', 'POST', {
             'tag_name': tag, 'name': 'Windows Firewall & Hardening ' + VERSION,
-            'draft': True, 'prerelease': False, 'generate_release_notes': True,
-            'body': f'Download **WinHardenSetup-{VERSION}.exe** below and run the wizard on Windows 11 Intel/AMD x64. '
-                    'Python and application dependencies are included. Existing settings and scan history are retained during upgrades. '
-                    'This installer is unsigned; Windows may show Unknown publisher. '
-                    'Verify the accompanying SHA-256 checksum before running a manually downloaded installer.'})
-    if not release.get('draft'):
+            'draft': True, 'prerelease': False, 'generate_release_notes': False,
+            'body': notes})
+    elif not release.get('draft'):
         raise ValueError('This release is already public. Publish a new version instead of replacing it.')
+    else:
+        # A failed upload can leave a reusable draft. Refresh its presentation
+        # from source so a rerun cannot publish stale notes from the first try.
+        release = api('/releases/' + str(release['id']), 'PATCH', {
+            'name': 'Windows Firewall & Hardening ' + VERSION,
+            'draft': True, 'prerelease': False, 'body': notes})
+    if not release.get('draft'):
+        raise ValueError('GitHub did not create or retain a draft release.')
     subprocess.run(['gh', 'release', 'upload', tag, '--repo', REPOSITORY, '--clobber',
                     *(str(p) for p in files.values())], check=True)
     release = api('/releases/' + str(release['id']))

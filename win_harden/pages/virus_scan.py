@@ -1,15 +1,45 @@
 """Scan, remediate, and monitor downloads through Microsoft Defender."""
 from PySide6.QtCore import QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QListWidget,
-                               QPushButton, QTableWidget, QTableWidgetItem, QHeaderView)
+from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget,
+                               QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+                               QVBoxLayout, QWidget)
 
 from ..widgets.page import Page, Group, Banner, KeyValueRow
 from ..widgets.confirm import confirm
+from ..widgets.state_switch import SwitchRow
 
 LABELS = {'queued': 'Queued', 'running': 'Scanning', 'clean': 'No threats detected',
           'remediated': 'Threats remediated', 'action_required': 'Action required',
           'failed': 'Failed', 'incomplete': 'Incomplete', 'cancelled': 'Cancelled', 'completed': 'Completed'}
+
+
+class _ActionRow(QWidget):
+    """One scan action with enough context to choose it confidently."""
+
+    def __init__(self, label, detail, button_label, action, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 6, 0, 6)
+        layout.setSpacing(14)
+
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        title = QLabel(label, self)
+        title.setObjectName('rowTitle')
+        title.setWordWrap(True)
+        text.addWidget(title)
+        explanation = QLabel(detail, self)
+        explanation.setObjectName('rowSubtitle')
+        explanation.setWordWrap(True)
+        text.addWidget(explanation)
+        layout.addLayout(text, 1)
+
+        button = QPushButton(button_label, self)
+        button.setAccessibleName(label)
+        button.setAccessibleDescription(detail)
+        button.clicked.connect(action)
+        layout.addWidget(button, 0, Qt.AlignVCenter)
 
 
 class VirusScanPage(Page):
@@ -24,19 +54,24 @@ class VirusScanPage(Page):
             ('engine', 'Antivirus'), ('realtime', 'Real-time protection'), ('downloads', 'Downloaded-file protection'),
             ('definitions', 'Definitions'), ('active', 'Active threats'), ('monitor', 'Download monitor'))}
         actions = self.add(Group('Scan this PC', 'Defender applies its configured quarantine/removal actions when a threat is found.'))
-        for label, action in [('Quick scan', lambda: self.submit('quick')), ('Full scan', lambda: self.submit('full')),
-                              ('Scan a file…', self.scan_file), ('Scan a folder…', self.scan_folder),
-                              ('Update definitions', lambda: self.submit('update')),
-                              ('Enable download protection', lambda: self.privileged('protect')),
-                              ('Remove active threats…', self.remove_threats),
-                              ('Open Windows Security / quarantine', self.open_security)]:
-            button = QPushButton(label)
-            button.clicked.connect(action)
-            actions.add(button)
+        for label, detail, button_label, action in [
+            ('Quick scan', 'Checks the Windows locations where active malware is most likely to be running. Usually finishes fastest.', 'Start', lambda: self.submit('quick')),
+            ('Full scan', 'Checks every file Defender can access on every attached drive. This can take hours and keeps running if this window is closed.', 'Start', lambda: self.submit('full')),
+            ('Scan a file', 'Choose one local file and add it to the protected scanner service.', 'Choose file…', self.scan_file),
+            ('Scan a folder', 'Queues each readable regular file below one local folder. Linked folders and unsupported paths are skipped and reported.', 'Choose folder…', self.scan_folder),
+            ('Update definitions', 'Asks Microsoft Defender to download the newest malware definitions. Internet access may be required.', 'Update', lambda: self.submit('update')),
+            ('Enable download protection', 'Turns on Defender checks for files downloaded from browsers and email. Windows may refuse this while Tamper Protection or organization policy controls it.', 'Enable', lambda: self.privileged('protect')),
+            ('Remove active threats', 'Asks Defender to remediate every currently active threat using its configured quarantine or removal action.', 'Review and remove…', self.remove_threats),
+            ('Windows Security and quarantine', 'Opens the Windows-owned protection history where quarantined items, required actions, and restart requests are reviewed.', 'Open', self.open_security),
+        ]:
+            actions.add(_ActionRow(label, detail, button_label, action, actions))
         monitor = self.add(Group('Automatic download scans', 'Downloads and the folders below are scanned in the background. Files can be opened while a rescan is pending.'))
-        self.pause = monitor.add(QCheckBox('Pause additional download scans'))
-        self.pause.setChecked(bool(getattr(window.monitor, 'paused', False)))
-        self.pause.toggled.connect(self.pause_monitor)
+        self.download_scanning = monitor.add(SwitchRow(
+            'Additional download scanning',
+            'On watches the folders below and queues stable new or changed files for Defender. Turning it off pauses these additional scans; Defender real-time protection continues independently.',
+            checked=not bool(getattr(window.monitor, 'paused', False)),
+        ))
+        self.download_scanning.toggled.connect(self.set_download_scanning)
         self.folders = monitor.add(QListWidget())
         self.folders.setMaximumHeight(120)
         self.load_folders()
@@ -146,8 +181,8 @@ class VirusScanPage(Page):
     def open_security():
         QDesktopServices.openUrl(QUrl('windowsdefender://threat'))
 
-    def pause_monitor(self, paused):
-        self.window.monitor.paused = paused
+    def set_download_scanning(self, enabled):
+        self.window.monitor.paused = not enabled
 
     def load_folders(self):
         self.folders.clear()

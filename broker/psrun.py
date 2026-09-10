@@ -13,6 +13,7 @@ import json
 import subprocess
 
 from .psinvoke import InvocationError, build_argv
+from .winprocess import creation_flags
 
 # A level can touch a dozen settings, and Set-MpPreference in particular is slow
 # on a machine that is mid-signature-update. Generous, but bounded: a script that
@@ -47,6 +48,7 @@ def run_script(script, params=None, timeout=DEFAULT_TIMEOUT, script_root=None):
             # No shell, and an explicit empty stdin so a script that unexpectedly
             # reads from it fails fast rather than hanging the broker.
             stdin=subprocess.DEVNULL,
+            creationflags=creation_flags(),
         )
     except FileNotFoundError as e:
         raise PowerShellFailed("powershell.exe couldn't be found", status=None) from e

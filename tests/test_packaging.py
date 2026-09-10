@@ -94,6 +94,8 @@ class TestBuildScript:
         assert len(collect) == 1
         assert all(e in collect[0].args for e in exes)
         for exe in exes:
+            assert exe.kwargs['console'] is False, (
+                f"{exe.kwargs['name']} would be able to create a console window")
             manifest = Path(exe.kwargs['manifest']).name
             assert manifest_level(manifest) == ('requireAdministrator' if exe.kwargs['name'].endswith('broker') else 'asInvoker')
 
@@ -111,6 +113,16 @@ class TestBuildScript:
     def test_build_runs_frozen_validation(self):
         assert 'verify-package.py' in BUILD
         assert 'set-toggle.ps1' in BUILD
+
+    def test_every_runtime_powershell_path_suppresses_console_windows(self):
+        gui_runner = (ROOT / 'win_harden/backend/powershell.py').read_text()
+        broker_runner = (ROOT / 'broker/psrun.py').read_text()
+        scanner_runner = (ROOT / 'scanner/engine.py').read_text()
+        assert 'configure_qprocess_no_window(process)' in gui_runner
+        assert 'creationflags=creation_flags()' in broker_runner
+        assert 'creationflags=creation_flags()' in scanner_runner
+        extra = ISS.split("procedure RunExtra", 1)[1].split("end;", 1)[0]
+        assert 'SW_HIDE' in extra and 'SW_SHOWNORMAL' not in extra
 
 
 class TestBootstrap:

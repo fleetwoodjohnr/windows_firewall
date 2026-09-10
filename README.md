@@ -23,8 +23,8 @@ The bootstrap automatically downloads the pinned Python runtime, Qt, pywin32, Py
 The build runs tests and checks the three frozen executables outside the source directory, then produces:
 
 ```text
-installer\Output\WinHardenSetup-1.2.0.exe
-installer\Output\WinHardenSetup-1.2.0.exe.sha256
+installer\Output\WinHardenSetup-1.2.1.exe
+installer\Output\WinHardenSetup-1.2.1.exe.sha256
 ```
 
 Run that installer on the target PC. **Python, Qt and pywin32 are bundled:** the installed application does not need a separate Python installation, pip, winget, or a developer environment. Windows 11 supplies PowerShell, Windows Firewall and Defender. The installer installs the scan service and a sign-in shortcut for the tray monitor. Optional Sysmon and definition updates require internet access; Sysmon downloads are hash-checked, signature-checked and scanned. The optional baseline item opens Microsoft's download page for manual review.
@@ -48,7 +48,7 @@ The GitHub-hosted Windows image disables some Defender protections and excludes 
 Confirm the hash on the target PC before running a manually downloaded installer:
 
 ```powershell
-Get-FileHash .\WinHardenSetup-1.2.0.exe -Algorithm SHA256
+Get-FileHash .\WinHardenSetup-1.2.1.exe -Algorithm SHA256
 ```
 
 Windows Server CI builds the package; it does not establish Windows 11 acceptance. Run the checklist below on the target laptop.
@@ -77,11 +77,11 @@ Version 1.2.0 is the first published release and introduces the updater, so it h
 
 1. Change `VERSION` in `win_harden/version.py` to the next `major.minor.patch` version. The GUI, all three executables, installer filename and Windows version metadata use that value.
 2. Commit and push the code to `main`. Confirm the Windows package job passes and verify its candidate installer on Windows 11 using [the acceptance checklist](docs/WINDOWS-VERIFICATION.md).
-3. Tag that exact verified commit and push the tag. For the first release:
+3. Tag that exact verified commit and push the tag. For version 1.2.1:
 
    ```bash
-   git tag v1.2.0 <verified-commit-sha>
-   git push origin v1.2.0
+   git tag v1.2.1 <verified-commit-sha>
+   git push origin v1.2.1
    ```
 
 The tag workflow checks the version, builds and tests the installer, then creates a draft GitHub Release. It uploads the installer, checksum and dependency inventory, verifies their sizes and GitHub SHA-256 digests, and publishes the complete release as latest. Build and upload failures leave no public update. Resolve the failure and rerun a draft release's workflow; an already-published release must be followed by a new version. Branch pushes and pull requests only create build artifacts.
@@ -105,6 +105,8 @@ Temporary browser download files are deferred until renamed and stable. Changed 
 ## Firewall and hardening
 
 Firewall profiles can be active simultaneously. Rule groups shared across profiles show their affected profiles before changes. Panic mode adds application-owned inbound/outbound block rules and records the prior profile settings; turning it off restores those settings. Apply panic mode only at the physical machine.
+
+Every switch uses the same state language as the Fedora application: red with the thumb on the left means **Off**, and green with the thumb on the right means **On**. The colour reports whether the Windows feature or rule is enabled, not whether enabling it is the safer choice. Read the risk marker and expanded explanation beside firewall rules before changing them. Machine-setting switches do not move while a confirmation or Administrator prompt is open; they move only after Windows confirms the change. A cancelled or refused change leaves the original position visible.
 
 Protection and Hardening contain six families, each with Off / Basic / Balanced / Strict choices: Defender/ASR, exploit protection, network exposure, credential protection, DNS privacy, and TLS/crypto. Read each level's compatibility notes before applying it. BitLocker is reported, not enabled by the app. A recovery protector being present does **not** prove the recovery key has been backed up.
 

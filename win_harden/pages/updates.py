@@ -4,11 +4,12 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox, QLabel, QProgressBar, QPushButton
+from PySide6.QtWidgets import QLabel, QProgressBar, QPushButton
 
 from ..updates import RELEASES_URL
 from ..version import VERSION
 from ..widgets.page import Page, Group, Banner, KeyValueRow
+from ..widgets.state_switch import SwitchRow
 
 
 class UpdatesPage(Page):
@@ -20,8 +21,12 @@ class UpdatesPage(Page):
         version.add(KeyValueRow("Installed", VERSION))
         self.latest = version.add(KeyValueRow("Latest", "Not checked"))
         self.last_check = version.add(KeyValueRow("Last successful check", "Never"))
-        self.automatic = version.add(QCheckBox("Check automatically and notify me about updates"))
-        self.automatic.setChecked(self.manager.settings.check_updates_automatically)
+        self.automatic = version.add(SwitchRow(
+            "Automatic update checks",
+            "Checks GitHub after startup when due and then at most once a day. It only notifies you; "
+            "nothing is downloaded or installed until you choose Update.",
+            checked=self.manager.settings.check_updates_automatically,
+        ))
         self.automatic.toggled.connect(self.manager.set_automatic)
         self.check = version.add(QPushButton("Check for updates"))
         self.check.clicked.connect(self.manager.check)
@@ -30,7 +35,12 @@ class UpdatesPage(Page):
         self.progress_bar = version.add(QProgressBar())
         self.cancel = version.add(QPushButton("Cancel download"))
         self.cancel.clicked.connect(self.manager.cancel)
-        note = version.add(QLabel("Updating opens an install wizard and requires administrator approval. The app and its download monitor close during installation. Existing settings and history are kept."))
+        note = version.add(QLabel(
+            "Update downloads the complete installer, verifies its published size and SHA-256 checksum, "
+            "then opens the Windows setup wizard. Administrator approval is required only for setup. "
+            "The app and download monitor close during replacement; settings, watched folders, scan "
+            "history, queued work, and the original-settings journal are kept."
+        ))
         note.setWordWrap(True)
         notes = self.add(Group("What's new"))
         self.notes = notes.add(QLabel("Release notes will appear here when an update is available."))

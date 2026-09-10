@@ -74,7 +74,9 @@ class FirewallPage(Page):
         self.groups_group = Group(
             "Inbound rule groups",
             "A group is on only when every rule in it is enabled. 'Partly on' means some rules "
-            "are open and some are not — switching it will apply to all of them.",
+            "are open and some are not — switching it will apply to all of them. Green means the "
+            "rules are enabled and red means disabled; colour reports state, not safety. Use each "
+            "row's risk dot and expanded explanation to decide what belongs on.",
             self,
         )
         self.search = QLineEdit(self.groups_group)

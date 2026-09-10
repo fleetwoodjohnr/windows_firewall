@@ -139,14 +139,6 @@ QComboBox QAbstractItemView {
     background: @{cardBg}; border: 1px solid @{border}; selection-background-color: @{selected};
 }
 
-#switch::indicator { width: 40px; height: 20px; }
-QCheckBox::indicator {
-    width: 16px; height: 16px;
-    border: 1px solid @{border}; border-radius: 4px; background: @{cardBg};
-}
-QCheckBox::indicator:checked { background: @{accent}; border-color: @{accent}; }
-QCheckBox::indicator:disabled { background: @{hover}; }
-
 #expander { border: none; background: transparent; color: @{dim}; padding: 2px 6px; }
 #expander:hover { color: @{fg}; }
 

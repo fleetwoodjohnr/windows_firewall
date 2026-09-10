@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidg
 from broker.dns_providers import PROVIDERS, get as get_provider
 
 from ..widgets.page import Group, KeyValueRow
+from ..widgets.state_switch import StateBackedSwitch, SwitchControl
 from ._levels_page import LevelFamilyPage
 
 # Individually switchable components, with why you might want each one back on.
@@ -42,12 +43,8 @@ class ToggleWidget(QWidget):
 
     def __init__(self, key, label, description, on_change, parent=None):
         super().__init__(parent)
-        from PySide6.QtWidgets import QCheckBox
-
         self.key = key
         self._on_change = on_change
-        self._syncing = False
-        self._system_state = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 6, 0, 6)
@@ -57,8 +54,11 @@ class ToggleWidget(QWidget):
         title = QLabel(label, self)
         title.setObjectName("rowTitle")
         top.addWidget(title, 1)
-        self.check = QCheckBox(self)
-        self.check.clicked.connect(self._on_clicked)
+        self.check = SwitchControl(self, accessible_name=label)
+        self.check.setAccessibleDescription(description)
+        self._state_switch = StateBackedSwitch(
+            self.check, self._request_change, parent=self
+        )
         top.addWidget(self.check, 0)
         layout.addLayout(top)
 
@@ -68,22 +68,9 @@ class ToggleWidget(QWidget):
         layout.addWidget(body)
 
     def set_state(self, enabled):
-        self._syncing = True
-        self._system_state = bool(enabled)
-        self.check.setChecked(bool(enabled))
-        self._syncing = False
+        self._state_switch.set_applied(bool(enabled))
 
-    def _on_clicked(self, requested):
-        if self._syncing:
-            return
-        self.set_state(self._system_state)   # put it back; the result moves it
-        self.check.setEnabled(False)
-
-        def done(ok):
-            self.check.setEnabled(True)
-            if ok:
-                self.set_state(requested)
-
+    def _request_change(self, requested, done):
         self._on_change(self.key, requested, done)
 
 

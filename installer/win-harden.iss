@@ -134,7 +134,7 @@ begin
   if WizardIsTaskSelected(TaskName) then
     if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
       '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\scripts\extras.ps1') + '" ' + Flag,
-      ExpandConstant('{app}'), SW_SHOWNORMAL, ewWaitUntilTerminated, Code) or (Code <> 0) then
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, Code) or (Code <> 0) then
       MsgBox('The optional task ' + TaskName + ' failed. The application is installed; retry this extra from scripts\extras.ps1 to see its error.', mbError, MB_OK);
 end;
 

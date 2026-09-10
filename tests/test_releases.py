@@ -68,6 +68,7 @@ def test_complete_release_is_published_after_upload_verification(monkeypatch, as
     publish_at = calls.index(('/releases/42', 'PATCH', {'draft': False, 'make_latest': 'true'}))
     assert next(i for i, c in enumerate(calls) if c[0] == 'upload') < publish_at - 1
     assert next(c for c in calls if c[1] == 'POST')[2]['draft'] is True
+    assert next(c for c in calls if c[1] == 'POST')[2]['body'] == release.release_body(release.VERSION)
     # The published payload is re-read, and nothing withdraws it.
     assert calls[publish_at + 1] == ('/releases/42', 'GET', None)
     assert not [c for c in calls if c[2] == {'draft': True}]
@@ -100,6 +101,21 @@ def test_corrupt_local_installer_prevents_any_publish(monkeypatch, assets):
     calls = mock_publish(monkeypatch, assets)
     (assets / f'WinHardenSetup-{release.VERSION}.exe').write_bytes(b'changed')
     with pytest.raises(ValueError):
+        release.publish(assets, 'v' + release.VERSION)
+    assert calls == []
+
+
+def test_missing_or_empty_versioned_notes_prevent_any_publish(monkeypatch, assets, tmp_path):
+    calls = mock_publish(monkeypatch, assets)
+    notes = tmp_path / 'notes'
+    notes.mkdir()
+    monkeypatch.setattr(release, 'RELEASE_NOTES', notes)
+    with pytest.raises(ValueError, match='Missing release notes'):
+        release.publish(assets, 'v' + release.VERSION)
+    assert calls == []
+
+    (notes / f'{release.VERSION}.md').write_text('')
+    with pytest.raises(ValueError, match='empty'):
         release.publish(assets, 'v' + release.VERSION)
     assert calls == []
 
@@ -160,6 +176,10 @@ def test_existing_draft_is_reused_instead_of_duplicated(monkeypatch, assets):
     calls = mock_publish(monkeypatch, assets, existing=[draft])
     release.publish(assets, 'v' + release.VERSION)
     assert not [c for c in calls if c[1] == 'POST']
+    assert ('/releases/42', 'PATCH', {
+        'name': 'Windows Firewall & Hardening ' + release.VERSION,
+        'draft': True, 'prerelease': False,
+        'body': release.release_body(release.VERSION)}) in calls
 
 
 def test_published_release_is_withdrawn_when_unusable(monkeypatch, assets):

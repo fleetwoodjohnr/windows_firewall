@@ -11,11 +11,12 @@ bill of health because it could not read anything is worse than one that shows
 nothing at all.
 """
 
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..data.findings import applicable, unreadable_families
 from ..widgets.confirm import confirm
 from ..widgets.page import Banner, Group, KeyValueRow, Page, unknown_label
+from ..widgets.state_switch import StateBackedSwitch, SwitchControl
 
 SEVERITY_TONE = {"high": "bad", "medium": "warn", "low": "ok"}
 SEVERITY_LABEL = {"high": "Important", "medium": "Worth doing", "low": "Minor"}
@@ -103,8 +104,13 @@ class DashboardPage(Page):
         label = QLabel("Block all network traffic", row)
         label.setObjectName("rowTitle")
         layout.addWidget(label, 1)
-        self.panic_switch = QCheckBox(row)
-        self.panic_switch.clicked.connect(self._on_panic_clicked)
+        self.panic_switch = SwitchControl(row, accessible_name="Block all network traffic")
+        self.panic_switch.setAccessibleDescription(
+            "Panic Mode immediately blocks incoming and outgoing traffic until it is switched off."
+        )
+        self._panic_state = StateBackedSwitch(
+            self.panic_switch, self._request_panic, parent=self
+        )
         layout.addWidget(self.panic_switch, 0)
         group.add(row)
 
@@ -133,12 +139,9 @@ class DashboardPage(Page):
 
     # -- panic mode -----------------------------------------------------------
 
-    def _on_panic_clicked(self, requested):
-        # Non-optimistic, like every other control: put it back and let the
-        # result move it.
-        self.panic_switch.setChecked(not requested)
+    def _request_panic(self, requested, done):
         if not requested:
-            self._apply_panic(False)
+            self._apply_panic(False, done)
             return
 
         confirm(
@@ -149,19 +152,18 @@ class DashboardPage(Page):
             "Remote Desktop, that session ends immediately and you will need physical access to "
             "turn this back off.",
             "Block everything",
-            lambda: self._apply_panic(True),
+            lambda: self._apply_panic(True, done),
+            lambda: done(False),
             destructive=True,
         )
 
-    def _apply_panic(self, enabled):
-        self.panic_switch.setEnabled(False)
-
+    def _apply_panic(self, enabled, done):
         def on_result(_result, error):
-            self.panic_switch.setEnabled(True)
             if error is not None:
                 self.banner.show_message("Panic mode could not be changed", str(error), tone="error")
+                done(False)
                 return
-            self.panic_switch.setChecked(enabled)
+            done(True)
             self.banner.show_message(
                 "All traffic is blocked" if enabled else "Normal traffic restored",
                 "Turn this off here when you are done." if enabled else "",
@@ -285,7 +287,7 @@ class DashboardPage(Page):
                 "ok" if profiles and len(enabled) == len(profiles) else "bad")
 
             panic = (result or {}).get("panicMode")
-            self.panic_switch.setChecked(bool(panic))
+            self._panic_state.set_applied(bool(panic))
 
             active = (result or {}).get("activeNetworks") or []
             if active:

@@ -53,7 +53,7 @@ def test_health_failures_clear_old_protection_values_and_recover(page):
 
 
 def test_buttons_queue_long_scans_without_reporting_completion(page):
-    button = next(b for b in page.findChildren(QPushButton) if b.text() == 'Full scan')
+    button = next(b for b in page.findChildren(QPushButton) if b.accessibleName() == 'Full scan')
     button.click()
     assert ('full', None) in page.client.calls
     assert page.banner._title.text() == 'Operation queued'
@@ -79,7 +79,8 @@ def test_removal_requires_explicit_confirmation_and_privileged_broker(page, monk
     assert invoked == ['remediate']
 
 
-def test_pause_controls_monitor_only(page):
-    page.pause.setChecked(True)
+def test_download_scanning_switch_controls_monitor_only(page):
+    assert page.download_scanning.isChecked()
+    page.download_scanning.setChecked(False)
     assert page.window.monitor.paused
     assert page.client.calls == []

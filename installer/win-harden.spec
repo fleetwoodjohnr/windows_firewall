@@ -22,8 +22,8 @@ service = Analysis([str(root / 'win-harden-scanner.py')], pathex=[str(root)], da
 app_exe = EXE(PYZ(gui.pure), gui.scripts, [], exclude_binaries=True, name='win-harden',
     console=False, version=str(version_file), icon=str(root / 'build' / 'win-harden.ico'), manifest=str(root / 'installer' / 'app.manifest'))
 broker_exe = EXE(PYZ(broker.pure), broker.scripts, [], exclude_binaries=True, name='win-harden-broker',
-    console=True, version=str(version_file), manifest=str(root / 'installer' / 'broker.manifest'))
+    console=False, version=str(version_file), manifest=str(root / 'installer' / 'broker.manifest'))
 service_exe = EXE(PYZ(service.pure), service.scripts, [], exclude_binaries=True, name='win-harden-scanner',
-    console=True, version=str(version_file), manifest=str(root / 'installer' / 'app.manifest'))
+    console=False, version=str(version_file), manifest=str(root / 'installer' / 'app.manifest'))
 coll = COLLECT(app_exe, broker_exe, service_exe, gui.binaries, gui.datas,
     broker.binaries, broker.datas, service.binaries, service.datas, name='win-harden')

@@ -15,6 +15,7 @@ import json
 from PySide6.QtCore import QObject, QProcess
 
 from broker.psinvoke import InvocationError, build_argv, is_read_only
+from broker.winprocess import configure_qprocess_no_window
 
 from .errors import PowerShellError, PowerShellNotFound, translate_powershell_error
 
@@ -56,6 +57,12 @@ class PowerShellRunner(QObject):
             return
 
         process = QProcess(self)
+        try:
+            configure_qprocess_no_window(process)
+        except RuntimeError as e:
+            process.deleteLater()
+            callback(None, PowerShellError(str(e)))
+            return
 
         # `finished` and the timeout are made mutually exclusive by this flag,
         # the same guard the broker client uses: a late timeout must not fire

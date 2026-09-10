@@ -234,6 +234,19 @@ class TestLevelSelector:
         assert applied[0].text() == "Basic"
         assert applied[0].property("level") == "basic"
 
+    def test_only_strict_uses_destructive_confirmation_appearance(self, qapp, monkeypatch):
+        appearances = []
+        monkeypatch.setattr(
+            "win_harden.widgets.level_selector.confirm",
+            lambda parent, h, b, l, on_confirm, on_cancel=None, destructive=True:
+                appearances.append(destructive),
+        )
+        balanced = self._selector(qapp, lambda level, done: None)
+        balanced._requested(2)
+        strict = self._selector(qapp, lambda level, done: None)
+        strict._requested(3)
+        assert appearances == [False, True]
+
 
 class TestToggleRow:
     def _row(self, qapp, on_toggle):
@@ -245,12 +258,12 @@ class TestToggleRow:
 
     def test_a_failed_toggle_snaps_back(self, qapp):
         row = self._row(qapp, lambda key, requested, done: done(False))
-        row._on_clicked(True)
+        row._switch.click()
         assert row._switch.isChecked() is False
 
     def test_a_successful_toggle_moves(self, qapp):
         row = self._row(qapp, lambda key, requested, done: done(True))
-        row._on_clicked(True)
+        row._switch.click()
         assert row._switch.isChecked() is True
 
     def test_set_enabled_state_does_not_fire_a_write(self, qapp):
@@ -259,6 +272,24 @@ class TestToggleRow:
         row.set_enabled_state(True)
         row.set_enabled_state(False)
         assert calls == []
+
+
+class TestHardeningToggle:
+    def test_direct_component_switch_uses_confirmed_state(self, qapp):
+        from win_harden.pages.hardening import ToggleWidget
+
+        pending = []
+        widget = ToggleWidget(
+            "rdp", "Remote Desktop", "Allows remote sign-in.",
+            lambda key, wanted, done: pending.append((key, wanted, done)),
+        )
+        assert not widget.check.isEnabled()
+        widget.set_state(False)
+        widget.check.click()
+        assert [(key, wanted) for key, wanted, _done in pending] == [("rdp", True)]
+        assert widget.check.isChecked() is False
+        pending[0][2](True)
+        assert widget.check.isChecked() is True
 
 
 class TestProtectionPage:
@@ -318,10 +349,12 @@ class TestDashboard:
         cancelled = []
         monkeypatch.setattr(
             "win_harden.pages.dashboard.confirm",
-            lambda parent, h, b, l, on_confirm, on_cancel=None, destructive=True: cancelled.append(1))
+            lambda parent, h, b, l, on_confirm, on_cancel=None, destructive=True: (
+                cancelled.append(1), on_cancel() if on_cancel else None))
         broker = FakeBroker()
         page = build_page("dashboard", FakeWindow(broker, tmp_path=tmp_path))
-        page._on_panic_clicked(True)
+        page._panic_state.set_applied(False)
+        page.panic_switch.click()
         assert cancelled, "blocking all traffic was not confirmed first"
         assert not any(name == "set-toggle" for name, _args in broker.calls)
         assert page.panic_switch.isChecked() is False
@@ -329,13 +362,15 @@ class TestDashboard:
     def test_panic_mode_engages_once_confirmed(self, qapp, tmp_path, auto_confirm):
         broker = FakeBroker()
         page = build_page("dashboard", FakeWindow(broker, tmp_path=tmp_path))
-        page._on_panic_clicked(True)
+        page._panic_state.set_applied(False)
+        page.panic_switch.click()
         assert ("set-toggle", ("panic-mode", True)) in broker.calls
 
     def test_turning_panic_mode_off_needs_no_confirmation(self, qapp, tmp_path):
         broker = FakeBroker()
         page = build_page("dashboard", FakeWindow(broker, tmp_path=tmp_path))
-        page._on_panic_clicked(False)
+        page._panic_state.set_applied(True)
+        page.panic_switch.click()
         assert ("set-toggle", ("panic-mode", False)) in broker.calls
 
 

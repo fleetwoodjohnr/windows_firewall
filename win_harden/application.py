@@ -190,7 +190,15 @@ class WinHardenApplication(QApplication):
         self.quit()
 
     def apply_theme(self):
-        self.setStyleSheet(load_stylesheet(dark=prefers_dark()))
+        dark = prefers_dark()
+        # Custom-painted switches cannot read QSS tokens back from Qt. Publish
+        # the selected palette explicitly so they repaint with the same light or
+        # dark semantic colours as the rest of the application.
+        self.setProperty("winHardenDarkTheme", dark)
+        self.setStyleSheet(load_stylesheet(dark=dark))
+        for widget in self.allWidgets():
+            if widget.objectName() == "stateSwitch":
+                widget.update()
 
     def show_window(self, hidden=False):
         from .window import MainWindow  # noqa: PLC0415 - avoids an import cycle

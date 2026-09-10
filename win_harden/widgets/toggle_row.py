@@ -8,18 +8,13 @@ is the same:
     once the write actually succeeds -- or is confirmed to have failed.
 
 Qt makes this slightly more work than GTK did. `Gtk.Switch` has a `state-set`
-signal designed for exactly this: the handler returns True to say "I will decide
-the state later". `QCheckBox` has no equivalent and moves itself on click, so the
-row puts it straight back and only moves it again when the backend answers.
-
-`_syncing` guards every programmatic move, for the reason spelled out at
-`service_row.py:85-92`: without it, setting the box back re-enters the handler
-and issues a second, opposite write the user never asked for.
+signal designed for exactly this; the shared `StateBackedSwitch` controller
+provides the same contract for Qt, including one-shot completion and a disabled
+pending state.
 """
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -27,6 +22,8 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
 )
+
+from .state_switch import StateBackedSwitch, SwitchControl
 
 RISK_CLASS = {"low": "ok", "medium": "warn", "high": "bad"}
 
@@ -42,7 +39,6 @@ class ToggleRow(QFrame):
         self.info = info
         self._on_toggle = on_toggle
         self._on_error = on_error
-        self._syncing = False
         self._expanded_once = False
 
         self.setObjectName("toggleRow")
@@ -81,13 +77,12 @@ class ToggleRow(QFrame):
         self._expander.toggled.connect(self._on_expanded)
         header.addWidget(self._expander, 0, Qt.AlignTop)
 
-        self._switch = QCheckBox(self)
-        self._switch.setObjectName("switch")
-        self._switch.setChecked(bool(enabled))
-        self._switch.setCursor(Qt.PointingHandCursor)
-        # `clicked` fires only for user interaction, never for setChecked(), so
-        # it is the right signal for "the user asked for this".
-        self._switch.clicked.connect(self._on_clicked)
+        self._switch = SwitchControl(self, accessible_name=info.label)
+        self._switch.setAccessibleDescription(info.summary)
+        self._state_switch = StateBackedSwitch(
+            self._switch, self._request_toggle, parent=self
+        )
+        self._state_switch.set_applied(bool(enabled))
         header.addWidget(self._switch, 0, Qt.AlignTop)
 
         outer.addLayout(header)
@@ -130,23 +125,11 @@ class ToggleRow(QFrame):
 
     def set_enabled_state(self, enabled):
         """Sync to backend state without triggering a write."""
-        self._syncing = True
-        self._switch.setChecked(bool(enabled))
-        self._syncing = False
+        self._state_switch.set_applied(bool(enabled))
 
-    def _on_clicked(self, requested):
-        if self._syncing:
-            return
-
-        # QCheckBox has already moved itself. Put it back: the position must
-        # reflect the system, and the system has not changed yet.
-        current = not requested
-        self.set_enabled_state(current)
-        self._switch.setEnabled(False)
-
+    def _request_toggle(self, requested, state_done):
         def done(ok, error=None):
-            self._switch.setEnabled(True)
-            self.set_enabled_state(requested if ok else current)
+            state_done(ok)
             if error is not None:
                 self._on_error(self.key, requested, error)
 

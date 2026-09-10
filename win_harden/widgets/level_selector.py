@@ -129,7 +129,9 @@ class LevelSelector(QWidget):
             f"Switch to {level.label}",
             apply,
             cancelled,
-            destructive=level.id in ("strict", "balanced"),
+            # Match the Fedora control: every change is confirmed, but only the
+            # compatibility-breaking Strict level uses destructive appearance.
+            destructive=level.id == "strict",
         )
 
     def _set_enabled_during_apply(self, enabled):

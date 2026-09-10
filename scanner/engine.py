@@ -7,6 +7,7 @@ import subprocess
 import threading
 
 from .paths import system_powershell
+from broker.winprocess import creation_flags
 
 PS_ROOT = Path(__file__).resolve().parent / "ps"
 
@@ -65,7 +66,7 @@ class DefenderEngine:
         if self.stopping.is_set():
             raise RuntimeError("The scan service is stopping.")
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, creationflags=0x08000000 if os.name == "nt" else 0)
+                                   stderr=subprocess.PIPE, creationflags=creation_flags())
         job = None
         if os.name == 'nt':
             # Closing the job also closes MpCmdRun descendants and their pipe
